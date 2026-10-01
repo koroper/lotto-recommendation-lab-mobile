@@ -14,7 +14,7 @@ repo = (root / 'app/src/main/java/com/lotto/lab/data/LottoRepository.kt').read_t
 db = (root / 'app/src/main/java/com/lotto/lab/data/LottoDb.kt').read_text(encoding='utf-8')
 vm = (root / 'app/src/main/java/com/lotto/lab/MainViewModel.kt').read_text(encoding='utf-8')
 
-ck('AGP 9.2.1 pinned', 'version "9.2.1"' in root_gradle)
+ck('AGP 9.1.1 pinned', 'version "9.1.1"' in root_gradle)
 ck('AGP built-in Kotlin used', 'org.jetbrains.kotlin.android' not in root_gradle and 'org.jetbrains.kotlin.android' not in app_gradle)
 ck('Built-in Kotlin not disabled', 'android.builtInKotlin=false' not in properties)
 ck('Compose compiler 2.2.10 pinned', 'org.jetbrains.kotlin.plugin.compose") version "2.2.10"' in root_gradle)
