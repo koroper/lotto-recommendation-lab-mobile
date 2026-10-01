@@ -47,7 +47,8 @@ data class ConfirmedRecord(
     val recommendationId: String,
     val payloadJson: String,
     val confirmedAt: Long,
-    val bestMatches: Int? = null
+    val bestMatches: Int? = null,
+    val evaluation: DrawEvaluation? = null
 )
 
 enum class Screen { RECOMMEND, RESEARCH, RECORDS, SETTINGS }

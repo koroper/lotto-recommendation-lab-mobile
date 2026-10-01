@@ -57,4 +57,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling:1.9.5")
+    testImplementation("junit:junit:4.13.2")
 }

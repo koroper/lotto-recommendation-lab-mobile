@@ -47,6 +47,11 @@ jobs:
           PYTHONPATH: app/src/main/python
         run: python validate_mobile_v1_1.py
 
+      - name: Confirmed-ticket evaluation tests
+        run: |
+          python test_confirmed_evaluation.py
+          gradle --no-daemon :app:testDebugUnitTest
+
       - name: Android static audit
         run: python audit_android_project.py
 

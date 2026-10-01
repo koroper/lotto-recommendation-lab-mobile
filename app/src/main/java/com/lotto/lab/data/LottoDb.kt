@@ -149,6 +149,18 @@ class LottoDb(context: Context) : SQLiteOpenHelper(context, "lotto_lab.db", null
         return out
     }
 
+    fun drawResult(draw: Int): Pair<List<Int>, Int>? =
+        readableDatabase.rawQuery("""
+            SELECT n1,n2,n3,n4,n5,n6,bonus FROM draws WHERE draw_no=?
+        """.trimIndent(), arrayOf(draw.toString())).use { c ->
+            if (!c.moveToFirst()) null
+            else {
+                val numbers = (0..5).map { c.getInt(it) }
+                val bonus = c.getInt(6)
+                numbers to bonus
+            }
+        }
+
     fun winningNumbers(draw: Int): Set<Int>? =
         readableDatabase.rawQuery("""
             SELECT n1,n2,n3,n4,n5,n6 FROM draws WHERE draw_no=?
