@@ -1,0 +1,28 @@
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated APK/AAB
+*.apk
+*.aab
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Secrets
+*.keystore
+*.jks
+secrets.properties
+.env
