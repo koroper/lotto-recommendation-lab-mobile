@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lotto.lab.ui.theme.LottoLabTheme
@@ -218,12 +219,29 @@ private fun GameCard(game: GameResult) {
 }
 
 @Composable
-private fun LottoBall(number: Int) {
+private fun LottoBall(
+    number: Int,
+    isMatched: Boolean = false,
+    isBonus: Boolean = false,
+    size: Dp = 42.dp
+) {
+    val (bgColor, textColor) = when {
+        isMatched -> MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.onPrimary
+        isBonus -> MaterialTheme.colorScheme.tertiary to MaterialTheme.colorScheme.onTertiary
+        else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Box(
-        Modifier.size(42.dp).background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+        Modifier
+            .size(size)
+            .background(bgColor, CircleShape),
         contentAlignment = Alignment.Center
     ) {
-        Text(number.toString(), fontWeight = FontWeight.ExtraBold)
+        Text(
+            number.toString(),
+            color = textColor,
+            fontWeight = if (isMatched || isBonus) FontWeight.ExtraBold else FontWeight.Bold,
+            style = if (size < 36.dp) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium
+        )
     }
 }
 
@@ -307,15 +325,103 @@ fun RecordsScreen(state: AppUiState) {
         } else {
             items(state.records) { r ->
                 Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("${r.draw}회", fontWeight = FontWeight.Bold)
-                        Text(r.recommendationId, style = MaterialTheme.typography.bodySmall)
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("${r.draw}회", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                            Text(r.recommendationId, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         val date = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.KOREA).format(Date(r.confirmedAt))
-                        Text("확정 $date", style = MaterialTheme.typography.bodySmall)
-                        Text(
-                            r.bestMatches?.let { "결과 반영 · 최고 ${it}개 일치" } ?: "아직 결과 발표 전",
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                        Text("확정 $date", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+                        val eval = r.evaluation
+                        if (eval == null) {
+                            Text(
+                                "아직 결과 발표 전",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("당첨 번호", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    eval.winningNumbers.forEach { num ->
+                                        LottoBall(number = num, isMatched = true, size = 32.dp)
+                                    }
+                                    Text("+", fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 2.dp))
+                                    LottoBall(number = eval.bonus, isBonus = true, size = 32.dp)
+                                    Text(
+                                        "보너스",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.tertiary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            val summaryText = if (eval.bestTier == PrizeTier.NONE) {
+                                "최고 결과 · 미당첨 · ${eval.bestMatchCount}개 일치"
+                            } else {
+                                "최고 결과 · ${eval.bestTier.label} · ${eval.bestMatchCount}개 일치"
+                            }
+                            Surface(
+                                color = if (eval.bestTier != PrizeTier.NONE) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(
+                                    summaryText,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (eval.bestTier != PrizeTier.NONE) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            HorizontalDivider(Modifier.padding(vertical = 4.dp))
+
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                eval.games.forEach { g ->
+                                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                "${g.index}게임 · ${g.mainMatchCount}개 일치 · ${g.prizeTier.label}",
+                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = if (g.prizeTier != PrizeTier.NONE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            if (g.hasBonus) {
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(
+                                                    "(보너스 일치)",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.tertiary,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
+                                        }
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            val matchedSet = g.matchedMainNumbers.toSet()
+                                            g.numbers.forEach { num ->
+                                                val isMatched = num in matchedSet
+                                                val isBonus = num == eval.bonus
+                                                LottoBall(
+                                                    number = num,
+                                                    isMatched = isMatched,
+                                                    isBonus = isBonus,
+                                                    size = 30.dp
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
