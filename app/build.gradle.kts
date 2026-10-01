@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.lotto.lab"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.lotto.lab"
