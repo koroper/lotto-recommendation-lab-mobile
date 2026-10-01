@@ -95,6 +95,52 @@ r = json.loads(m.quick_research(payload, 40))
 assert abs(sum(r['weights'].values()) - 1) < 1e-9
 assert r['testedDraws'] == 40
 assert isinstance(r['promoted'], bool)
+assert r['trainingDraws'] == 30
+assert r['holdoutDraws'] == 10
+assert 'fullGain' in r and 'holdoutGain' in r
+
+# Regression tests for research validation gate & holdout leakage prevention:
+# 1. Exact tie => HOLD
+assert not m._eval_promotion_gate(0.700, 0.700, 0.775, 0.775), 'Gate: exact tie must HOLD'
+r_tie = json.loads(m.quick_research(json.dumps(mk(7001, 300)), 40))
+assert abs(r_tie['holdoutCandidate'] - r_tie['holdoutEqual']) < 1e-9, 'Expected exact tie on seed 7001'
+assert r_tie['promoted'] is False, 'Exact tie must result in HOLD'
+assert '동점' in r_tie['message'], 'Tie message must clearly indicate tie'
+
+# 2. Holdout worse => HOLD
+assert not m._eval_promotion_gate(0.700, 0.690, 0.775, 0.800), 'Gate: holdout worse must HOLD'
+r_worse = json.loads(m.quick_research(json.dumps(mk(7009, 300)), 40))
+assert r_worse['holdoutCandidate'] < r_worse['holdoutEqual'], 'Expected holdout worse on seed 7009'
+assert r_worse['promoted'] is False, 'Holdout worse must result in HOLD'
+
+# 3. Holdout better + full non-degraded => PROMOTE
+assert m._eval_promotion_gate(0.700, 0.800, 0.775, 0.775), 'Gate: holdout better + full non-degraded must PROMOTE'
+assert m._eval_promotion_gate(0.700, 0.800, 0.775, 0.850), 'Gate: holdout better + full better must PROMOTE'
+assert not m._eval_promotion_gate(0.700, 0.800, 0.775, 0.750), 'Gate: full degraded must HOLD'
+r_promote = json.loads(m.quick_research(json.dumps(mk(7003, 300)), 40))
+assert r_promote['holdoutCandidate'] > r_promote['holdoutEqual'] and r_promote['fullCandidate'] >= r_promote['fullEqual']
+assert r_promote['promoted'] is True, 'Holdout better + full non-degraded must PROMOTE'
+
+# 4. Holdout data is excluded when deriving candidate weights
+base_hist = mk(8888, 120)
+res_base = json.loads(m.quick_research(json.dumps(base_hist), 40))
+alt_hist = [dict(d) for d in base_hist]
+rng2 = random.Random(9999)
+for idx in range(110, 120):
+    nums = sorted(rng2.sample(range(1, 46), 6))
+    bonus = rng2.choice([n for n in range(1, 46) if n not in nums])
+    alt_hist[idx] = {
+        'draw': base_hist[idx]['draw'],
+        'date': base_hist[idx]['date'],
+        'numbers': nums,
+        'bonus': bonus,
+    }
+res_alt = json.loads(m.quick_research(json.dumps(alt_hist), 40))
+
+for mod_name in m.MODELS:
+    assert abs(res_base['modelAverageMatches'][mod_name] - res_alt['modelAverageMatches'][mod_name]) < 1e-9, (
+        f'Holdout leakage detected: candidate training model average for {mod_name} changed when altering only holdout data'
+    )
 
 # Representative performance smoke test. These timings are informational, not CI limits.
 large = mk(9001, 1000)

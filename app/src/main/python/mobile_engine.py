@@ -489,6 +489,12 @@ def recommend(history_json, weights_json="", config_json=""):
     }, ensure_ascii=False)
 
 
+def _eval_promotion_gate(hold_equal, hold_candidate, full_equal, full_candidate, eps=1e-9):
+    holdout_better = (hold_candidate - hold_equal) > eps
+    full_non_degraded = (full_candidate - full_equal) >= -eps
+    return bool(holdout_better and full_non_degraded)
+
+
 def quick_research(history_json, test_draws=40):
     history = _parse_history(history_json)
     available = len(history) - 80
@@ -512,18 +518,22 @@ def quick_research(history_json, test_draws=40):
             }
         })
 
+    # Chronologically split into approx 75% training-validation and 25% untouched holdout
+    split = min(max(1, int(len(frames) * 0.75)), len(frames) - 1)
+    train_frames = frames[:split]
+    holdout = frames[split:]
+
+    # Derive model_avg, learned weights, and candidate weights ONLY from train_frames
     model_avg = {
-        m: sum(f["matches"][m] for f in frames) / len(frames)
+        m: sum(f["matches"][m] for f in train_frames) / len(train_frames)
         for m in mids
     }
     mean_avg = sum(model_avg.values()) / len(mids)
     exps = {m: math.exp((model_avg[m] - mean_avg) * 2.5) for m in mids}
     s = sum(exps.values())
     learned = {m: exps[m] / s for m in mids}
-    equal = {m: 1 / len(mids) for m in mids}
-    candidate = {m: .5 * learned[m] + .5 * equal[m] for m in mids}
-
-    split = max(1, int(len(frames) * .75))
+    equal = {m: 1.0 / len(mids) for m in mids}
+    candidate = {m: 0.5 * learned[m] + 0.5 * equal[m] for m in mids}
 
     def ensemble_avg(part, weights):
         hits = []
@@ -536,19 +546,26 @@ def quick_research(history_json, test_draws=40):
             hits.append(len(f["actual"] & set(top)))
         return sum(hits) / len(hits) if hits else 0.0
 
-    holdout = frames[split:] or frames
     full_equal = ensemble_avg(frames, equal)
     full_candidate = ensemble_avg(frames, candidate)
     hold_equal = ensemble_avg(holdout, equal)
     hold_candidate = ensemble_avg(holdout, candidate)
 
-    promoted = hold_candidate >= hold_equal and full_candidate >= full_equal
+    eps = 1e-9
+    promoted = _eval_promotion_gate(hold_equal, hold_candidate, full_equal, full_candidate, eps)
     final_weights = candidate if promoted else equal
-    message = (
-        "빠른 연구 보정 가중치를 적용합니다."
-        if promoted else
-        "홀드아웃에서 뚜렷한 개선이 없어 동일가중치를 유지합니다."
-    )
+
+    full_gain = full_candidate - full_equal
+    holdout_gain = hold_candidate - hold_equal
+
+    if promoted:
+        message = "빠른 연구 보정 가중치를 적용합니다."
+    elif abs(hold_candidate - hold_equal) <= eps:
+        message = "독립 홀드아웃 검증에서 동점으로 개선이 없어 기본 가중치를 유지합니다."
+    elif hold_candidate < hold_equal:
+        message = "독립 홀드아웃 검증에서 개선이 없어 기본 가중치를 유지합니다."
+    else:
+        message = "전체 기간 검증에서 성능이 저하되어 기본 가중치를 유지합니다."
 
     return json.dumps({
         "promoted": promoted,
@@ -560,4 +577,8 @@ def quick_research(history_json, test_draws=40):
         "holdoutEqual": round(hold_equal, 3),
         "holdoutCandidate": round(hold_candidate, 3),
         "testedDraws": len(frames),
+        "trainingDraws": len(train_frames),
+        "holdoutDraws": len(holdout),
+        "fullGain": round(full_gain, 4),
+        "holdoutGain": round(holdout_gain, 4),
     }, ensure_ascii=False)

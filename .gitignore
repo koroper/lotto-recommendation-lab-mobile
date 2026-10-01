@@ -23,6 +23,7 @@ Thumbs.db
 
 # Secrets
 *.keystore
+*.keystore.base64
 *.jks
 secrets.properties
 .env
