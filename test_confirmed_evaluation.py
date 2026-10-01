@@ -8,7 +8,7 @@ def evaluate_game(numbers, winning, bonus):
     matched = sorted(n_set & w_set)
     match_count = len(matched)
     has_bonus = bonus in n_set
-
+    
     if match_count == 6:
         tier = "1등"
     elif match_count == 5 and has_bonus:
@@ -21,15 +21,14 @@ def evaluate_game(numbers, winning, bonus):
         tier = "5등"
     else:
         tier = "미당첨"
-
+        
     return {
         "numbers": numbers,
         "matched": matched,
         "match_count": match_count,
         "has_bonus": has_bonus,
-        "tier": tier,
+        "tier": tier
     }
-
 
 def evaluate_draw(winning, bonus, games):
     order = {"1등": 1, "2등": 2, "3등": 3, "4등": 4, "5등": 5, "미당첨": 6}
@@ -41,9 +40,8 @@ def evaluate_draw(winning, bonus, games):
         "bonus": bonus,
         "games": evals,
         "best_tier": best_tier,
-        "best_match": best_match,
+        "best_match": best_match
     }
-
 
 # 1. Deterministic Tier Rule Tests
 WINNING = [3, 11, 14, 18, 26, 34]
@@ -80,23 +78,18 @@ g6_0 = evaluate_game([1, 2, 4, 5, 6, 7], WINNING, BONUS)
 assert g6_0["match_count"] == 0 and g6_0["tier"] == "미당첨", f"Expected 미당첨 (0 matches), got {g6_0}"
 
 # 2. Draw-level summary evaluation
-draw_eval = evaluate_draw(
-    WINNING,
-    BONUS,
-    [
-        {"index": 1, "numbers": [3, 11, 14, 18, 40, 45]},
-        {"index": 2, "numbers": [3, 11, 14, 39, 40, 45]},
-        {"index": 3, "numbers": [1, 2, 4, 5, 6, 7]},
-    ],
-)
+draw_eval = evaluate_draw(WINNING, BONUS, [
+    {"index": 1, "numbers": [3, 11, 14, 18, 40, 45]}, # 4등 (4 matches)
+    {"index": 2, "numbers": [3, 11, 14, 39, 40, 45]}, # 5등 (3 matches)
+    {"index": 3, "numbers": [1, 2, 4, 5, 6, 7]},       # 미당첨 (0 matches)
+])
 assert draw_eval["best_tier"] == "4등"
 assert draw_eval["best_match"] == 4
 
 # 3. Database roundtrip & pending state validation
 conn = sqlite3.connect(":memory:")
 cur = conn.cursor()
-cur.execute(
-    """
+cur.execute("""
     CREATE TABLE draws(
         draw_no INTEGER PRIMARY KEY,
         date TEXT NOT NULL,
@@ -104,18 +97,15 @@ cur.execute(
         n4 INTEGER NOT NULL, n5 INTEGER NOT NULL, n6 INTEGER NOT NULL,
         bonus INTEGER NOT NULL
     )
-"""
-)
-cur.execute(
-    """
+""")
+cur.execute("""
     CREATE TABLE recommendations(
         draw_no INTEGER PRIMARY KEY,
         recommendation_id TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         confirmed_at INTEGER NOT NULL
     )
-"""
-)
+""")
 
 # Insert past completed draw 1243
 cur.execute("INSERT INTO draws VALUES (1243, '2026-09-26', 3, 11, 14, 18, 26, 34, 42)")
@@ -127,23 +117,19 @@ payload_1243 = {
     "games": [
         {"index": 1, "numbers": [3, 11, 14, 18, 40, 45], "score": 85.0},
         {"index": 2, "numbers": [1, 2, 4, 5, 6, 7], "score": 80.0},
-    ],
+    ]
 }
-cur.execute(
-    "INSERT INTO recommendations VALUES (1243, '1243-ABC12345', ?, 1790000000000)",
-    (json.dumps(payload_1243),),
-)
+cur.execute("INSERT INTO recommendations VALUES (1243, '1243-ABC12345', ?, 1790000000000)", (json.dumps(payload_1243),))
 
 # Insert confirmed recommendation for future target draw 1244 (NO draw result exists yet)
 payload_1244 = {
     "recommendationId": "1244-0FE2C161BB",
     "targetDraw": 1244,
-    "games": [{"index": 1, "numbers": [5, 12, 19, 23, 31, 44], "score": 88.0}],
+    "games": [
+        {"index": 1, "numbers": [5, 12, 19, 23, 31, 44], "score": 88.0}
+    ]
 }
-cur.execute(
-    "INSERT INTO recommendations VALUES (1244, '1244-0FE2C161BB', ?, 1790800000000)",
-    (json.dumps(payload_1244),),
-)
+cur.execute("INSERT INTO recommendations VALUES (1244, '1244-0FE2C161BB', ?, 1790800000000)", (json.dumps(payload_1244),))
 
 # Query draw 1244: winning numbers absent => must be pending (evaluation = None)
 cur.execute("SELECT n1, n2, n3, n4, n5, n6, bonus FROM draws WHERE draw_no=1244")
