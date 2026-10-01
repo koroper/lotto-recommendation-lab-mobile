@@ -78,3 +78,74 @@ object ConfirmedTicketEvaluator {
         )
     }
 }
+
+enum class PerformanceWindow(val label: String, val limit: Int?) {
+    RECENT_10("최근 10회", 10),
+    RECENT_30("최근 30회", 30),
+    ALL("전체", null)
+}
+
+data class PerformanceSummary(
+    val completedDraws: Int,
+    val pendingDraws: Int,
+    val averageBestMatches: Double?,
+    val drawsWith3Plus: Int,
+    val drawsWith4Plus: Int,
+    val bestTier: PrizeTier?,
+    val tierCounts: Map<PrizeTier, Int>
+)
+
+object PerformanceAggregator {
+    fun aggregate(
+        records: List<ConfirmedRecord>,
+        window: PerformanceWindow = PerformanceWindow.RECENT_10
+    ): PerformanceSummary = aggregate(records, window.limit)
+
+    fun aggregate(
+        records: List<ConfirmedRecord>,
+        limit: Int?
+    ): PerformanceSummary {
+        val pendingDraws = records.count { it.evaluation == null }
+        val evaluatedRecords = records
+            .filter { it.evaluation != null }
+            .sortedWith(compareByDescending<ConfirmedRecord> { it.draw }.thenByDescending { it.confirmedAt })
+
+        val windowed = if (limit != null && limit > 0) {
+            evaluatedRecords.take(limit)
+        } else {
+            evaluatedRecords
+        }
+
+        val completedDraws = windowed.size
+        val tierCounts = PrizeTier.values().associateWith { tier ->
+            windowed.count { it.evaluation?.bestTier == tier }
+        }
+
+        if (completedDraws == 0) {
+            return PerformanceSummary(
+                completedDraws = 0,
+                pendingDraws = pendingDraws,
+                averageBestMatches = null,
+                drawsWith3Plus = 0,
+                drawsWith4Plus = 0,
+                bestTier = null,
+                tierCounts = tierCounts
+            )
+        }
+
+        val avgBestMatches = windowed.map { it.evaluation!!.bestMatchCount }.average()
+        val drawsWith3Plus = windowed.count { it.evaluation!!.bestMatchCount >= 3 }
+        val drawsWith4Plus = windowed.count { it.evaluation!!.bestMatchCount >= 4 }
+        val bestTier = windowed.mapNotNull { it.evaluation?.bestTier }.minByOrNull { it.order }
+
+        return PerformanceSummary(
+            completedDraws = completedDraws,
+            pendingDraws = pendingDraws,
+            averageBestMatches = avgBestMatches,
+            drawsWith3Plus = drawsWith3Plus,
+            drawsWith4Plus = drawsWith4Plus,
+            bestTier = bestTier,
+            tierCounts = tierCounts
+        )
+    }
+}

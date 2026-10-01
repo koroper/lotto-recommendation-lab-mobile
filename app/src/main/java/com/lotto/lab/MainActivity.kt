@@ -314,12 +314,170 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
 
 @Composable
 fun RecordsScreen(state: AppUiState) {
+    var selectedWindow by remember { mutableStateOf(PerformanceWindow.RECENT_10) }
+    val summary = remember(state.records, selectedWindow) {
+        PerformanceAggregator.aggregate(state.records, selectedWindow)
+    }
+
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item { Header("📊 실제 확정 기록", "결과 발표 전에 확정한 구매안만 추적합니다.") }
+
+        // Performance Dashboard Card
+        item {
+            Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
+                Column(
+                    Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "실제 구매 성과 대시보드",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    // 1. Filter chips: 최근 10회, 최근 30회, 전체
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PerformanceWindow.values().forEach { window ->
+                            FilterChip(
+                                selected = selectedWindow == window,
+                                onClick = { selectedWindow = window },
+                                label = { Text(window.label) }
+                            )
+                        }
+                    }
+
+                    // 2. Main summary: 결과 확인 N회, 결과 대기 N회
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                "결과 확인 ${summary.completedDraws}회",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text(
+                                "결과 대기 ${summary.pendingDraws}회",
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                        }
+                    }
+
+                    // Empty / Early data UX or Metrics
+                    if (summary.completedDraws == 0) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "아직 결과가 확인된 구매안이 없습니다.",
+                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (summary.pendingDraws > 0) {
+                                    Text(
+                                        "결과 대기 중인 구매안 ${summary.pendingDraws}회는 추첨 결과가 등록되면 자동으로 성과에 반영됩니다.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        // 3. Metric cards: 평균 최고 일치, 3개 이상, 4개 이상, 최고 결과
+                        val avgStr = summary.averageBestMatches?.let { String.format(Locale.KOREA, "%.2f개", it) } ?: "—"
+                        val bestTierStr = summary.bestTier?.label ?: "—"
+
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            DashboardMetricCard(
+                                title = "평균 최고 일치",
+                                value = avgStr,
+                                modifier = Modifier.weight(1f)
+                            )
+                            DashboardMetricCard(
+                                title = "3개 이상",
+                                value = "${summary.drawsWith3Plus}회",
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            DashboardMetricCard(
+                                title = "4개 이상",
+                                value = "${summary.drawsWith4Plus}회",
+                                modifier = Modifier.weight(1f)
+                            )
+                            DashboardMetricCard(
+                                title = "최고 결과",
+                                value = bestTierStr,
+                                modifier = Modifier.weight(1f),
+                                isHighlight = summary.bestTier != null && summary.bestTier != PrizeTier.NONE
+                            )
+                        }
+
+                        // 4. Compact result distribution
+                        HorizontalDivider(Modifier.padding(vertical = 2.dp))
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                "회차별 최고 등수 분포",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontWeight = FontWeight.Bold
+                            )
+                            val distText = "1등 ${summary.tierCounts[PrizeTier.FIRST] ?: 0} · 2등 ${summary.tierCounts[PrizeTier.SECOND] ?: 0} · 3등 ${summary.tierCounts[PrizeTier.THIRD] ?: 0} · 4등 ${summary.tierCounts[PrizeTier.FOURTH] ?: 0} · 5등 ${summary.tierCounts[PrizeTier.FIFTH] ?: 0} · 미당첨 ${summary.tierCounts[PrizeTier.NONE] ?: 0}"
+                            Text(
+                                distText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Text(
+                            "※ 과거 확정 성과는 미래 로또 6/45의 물리적 독립 당첨 확률을 변경하지 않습니다.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                "구매안별 상세 결과",
+                Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
         if (state.records.isEmpty()) {
             item { Text("아직 확정 구매안 기록이 없습니다.", Modifier.padding(horizontal = 16.dp)) }
         } else {
@@ -488,6 +646,37 @@ private fun ErrorScreen(error: String, retry: () -> Unit) {
             Text(error, color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.height(16.dp))
             Button(onClick = retry) { Text("다시 시도") }
+        }
+    }
+}
+
+@Composable
+private fun DashboardMetricCard(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    isHighlight: Boolean = false
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(8.dp),
+        color = if (isHighlight) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Column(
+            Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (isHighlight) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (isHighlight) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+            )
         }
     }
 }

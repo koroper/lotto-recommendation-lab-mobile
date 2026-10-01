@@ -147,4 +147,78 @@ assert eval_1243["games"][0]["tier"] == "4등"
 assert eval_1243["games"][0]["matched"] == [3, 11, 14, 18]
 assert eval_1243["games"][1]["tier"] == "미당첨"
 
-print("ALL EVALUATION & PERSISTENCE TESTS PASSED")
+# 4. Performance Dashboard Aggregator Parity Tests
+def aggregate_performance(records, limit=None):
+    pending = sum(1 for r in records if r.get("evaluation") is None)
+    evaluated = [r for r in records if r.get("evaluation") is not None]
+    evaluated.sort(key=lambda r: (r["draw"], r.get("confirmed_at", 0)), reverse=True)
+    if limit is not None and limit > 0:
+        windowed = evaluated[:limit]
+    else:
+        windowed = evaluated
+
+    order = {"1등": 1, "2등": 2, "3등": 3, "4등": 4, "5등": 5, "미당첨": 6}
+    tier_counts = {t: 0 for t in ["1등", "2등", "3등", "4등", "5등", "미당첨"]}
+    for r in windowed:
+        tier_counts[r["evaluation"]["best_tier"]] += 1
+
+    if not windowed:
+        return {
+            "completed_draws": 0,
+            "pending_draws": pending,
+            "average_best_matches": None,
+            "draws_with_3plus": 0,
+            "draws_with_4plus": 0,
+            "best_tier": None,
+            "tier_counts": tier_counts
+        }
+
+    avg_best = sum(r["evaluation"]["best_match"] for r in windowed) / len(windowed)
+    with_3plus = sum(1 for r in windowed if r["evaluation"]["best_match"] >= 3)
+    with_4plus = sum(1 for r in windowed if r["evaluation"]["best_match"] >= 4)
+    best_tier = min(windowed, key=lambda r: order[r["evaluation"]["best_tier"]])["evaluation"]["best_tier"]
+
+    return {
+        "completed_draws": len(windowed),
+        "pending_draws": pending,
+        "average_best_matches": avg_best,
+        "draws_with_3plus": with_3plus,
+        "draws_with_4plus": with_4plus,
+        "best_tier": best_tier,
+        "tier_counts": tier_counts
+    }
+
+# Test 1: Pending excluded from completed
+records_sample = [
+    {"draw": 1001, "confirmed_at": 1000, "evaluation": {"best_match": 4, "best_tier": "4등"}},
+    {"draw": 1002, "confirmed_at": 2000, "evaluation": {"best_match": 3, "best_tier": "5등"}},
+    {"draw": 1003, "confirmed_at": 3000, "evaluation": None},
+    {"draw": 1004, "confirmed_at": 4000, "evaluation": None},
+]
+agg_all = aggregate_performance(records_sample, None)
+assert agg_all["completed_draws"] == 2
+assert agg_all["pending_draws"] == 2
+assert abs(agg_all["average_best_matches"] - 3.5) < 1e-4
+assert agg_all["draws_with_3plus"] == 2
+assert agg_all["draws_with_4plus"] == 1
+assert agg_all["best_tier"] == "4등"
+
+# Test 2: Recent 10 window selects latest 10
+fifteen_records = [
+    {"draw": d, "confirmed_at": d * 1000, "evaluation": {"best_match": 1 if d <= 1005 else 5, "best_tier": "미당첨" if d <= 1005 else "3등"}}
+    for d in range(1001, 1016)
+]
+agg_10 = aggregate_performance(fifteen_records, 10)
+assert agg_10["completed_draws"] == 10
+assert abs(agg_10["average_best_matches"] - 5.0) < 1e-4
+assert agg_10["best_tier"] == "3등"
+assert agg_10["tier_counts"]["3등"] == 10
+
+# Test 3: Empty dataset
+agg_empty = aggregate_performance([{"draw": 1001, "evaluation": None}], 10)
+assert agg_empty["completed_draws"] == 0
+assert agg_empty["pending_draws"] == 1
+assert agg_empty["average_best_matches"] is None
+assert agg_empty["best_tier"] is None
+
+print("ALL EVALUATION, PERSISTENCE & AGGREGATOR TESTS PASSED")
