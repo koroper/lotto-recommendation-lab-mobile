@@ -141,18 +141,23 @@ class LottoRepository(context: Context) {
             val id = row.second
             val payload = row.third.first
             val whenMs = row.third.second
-            val actual = db.winningNumbers(draw)
-            val best = if (actual == null) null else {
-                val games = JSONObject(payload).getJSONArray("games")
-                var bestMatch = 0
-                for (i in 0 until games.length()) {
-                    val nums = games.getJSONObject(i).getJSONArray("numbers")
-                    val set = (0 until nums.length()).map { nums.getInt(it) }.toSet()
-                    bestMatch = maxOf(bestMatch, set.intersect(actual).size)
+            val winData = db.drawResult(draw)
+            val evaluation = if (winData == null) null else {
+                val winningNumbers = winData.first
+                val bonus = winData.second
+                val gamesJson = JSONObject(payload).getJSONArray("games")
+                val parsedGames = mutableListOf<Pair<Int, List<Int>>>()
+                for (i in 0 until gamesJson.length()) {
+                    val g = gamesJson.getJSONObject(i)
+                    val idx = g.optInt("index", i + 1)
+                    val nums = g.getJSONArray("numbers")
+                    val numbersList = (0 until nums.length()).map { nums.getInt(it) }
+                    parsedGames += idx to numbersList
                 }
-                bestMatch
+                ConfirmedTicketEvaluator.evaluateDraw(winningNumbers, bonus, parsedGames)
             }
-            ConfirmedRecord(draw, id, payload, whenMs, best)
+            val best = evaluation?.bestMatchCount
+            ConfirmedRecord(draw, id, payload, whenMs, best, evaluation)
         }
     }
 }
