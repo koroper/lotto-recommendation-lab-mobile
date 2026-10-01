@@ -1,0 +1,58 @@
+name: Android zero-cost build gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: yes | sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Set up Gradle 9.4.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.4.1'
+
+      - name: Install desktop parity-test dependencies
+        run: python -m pip install --disable-pip-version-check pandas numpy
+
+      - name: Mobile engine + desktop parity validation
+        env:
+          PYTHONPATH: app/src/main/python
+        run: python validate_mobile_v1_1.py
+
+      - name: Android static audit
+        run: python audit_android_project.py
+
+      - name: Assemble debug APK (verification only)
+        run: gradle --no-daemon :app:assembleDebug
+
+      # Deliberately no artifact upload: this workflow is a build gate only.
+      # It avoids accumulating Actions artifact storage during iterative AI development.
