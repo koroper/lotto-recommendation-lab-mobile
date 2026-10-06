@@ -98,6 +98,11 @@ assert isinstance(r['promoted'], bool)
 assert r['trainingDraws'] == 30
 assert r['holdoutDraws'] == 10
 assert 'fullGain' in r and 'holdoutGain' in r
+assert r['foldCount'] == 3
+assert len(r['folds']) == 3
+assert 'foldWins' in r and 'foldTies' in r and 'foldLosses' in r
+assert 'meanFoldGain' in r and 'worstFoldGain' in r and 'finalHoldoutGain' in r
+assert r['worstFoldThreshold'] == -0.05
 
 # Regression tests for research validation gate & holdout leakage prevention:
 # 1. Exact tie => HOLD
@@ -141,6 +146,141 @@ for mod_name in m.MODELS:
     assert abs(res_base['modelAverageMatches'][mod_name] - res_alt['modelAverageMatches'][mod_name]) < 1e-9, (
         f'Holdout leakage detected: candidate training model average for {mod_name} changed when altering only holdout data'
     )
+
+# --- Phase 2 Step 3A: 12 Repeated Walk-Forward Validation & Leakage-Free Tests ---
+# Test 1: Exactly 3 chronological validation folds when sufficient history exists
+r_folds = json.loads(m.quick_research(payload, 40))
+assert r_folds['foldCount'] == 3, f"Expected 3 folds, got {r_folds['foldCount']}"
+assert len(r_folds['folds']) == 3, f"Expected 3 fold detail entries, got {len(r_folds['folds'])}"
+
+# Test 2: No overlap between training and validation within each fold
+for f in r_folds['folds']:
+    assert f['trainDraws'] > 0 and f['valDraws'] > 0
+    assert f['trainEndDraw'] < f['valStartDraw'], f"Overlap detected in fold {f['fold']}: trainEnd {f['trainEndDraw']} >= valStart {f['valStartDraw']}"
+
+# Test 3: Validation periods are strictly chronological and non-overlapping
+f1, f2, f3 = r_folds['folds']
+assert f1['valEndDraw'] < f2['valStartDraw'], f"Folds 1 & 2 overlap: f1 valEnd {f1['valEndDraw']} >= f2 valStart {f2['valStartDraw']}"
+assert f2['valEndDraw'] < f3['valStartDraw'], f"Folds 2 & 3 overlap: f2 valEnd {f2['valEndDraw']} >= f3 valStart {f3['valStartDraw']}"
+
+# Test 4: Fold candidate weights use only pre-validation data
+# For fold 1, training draws are strictly earlier than validation start
+assert f1['trainEndDraw'] < f1['valStartDraw']
+assert f2['trainEndDraw'] < f2['valStartDraw']
+assert f3['trainEndDraw'] < f3['valStartDraw']
+
+# Test 5A: Future-data mutation from Fold 1 valStart onward leaves Fold 1 candidate weights strictly identical
+leak_base_hist = mk(1234, 150)
+r_leak_base = json.loads(m.quick_research(json.dumps(leak_base_hist), 40))
+f1_val_start_draw = r_leak_base['folds'][0]['valStartDraw']
+f1_base_weights = r_leak_base['folds'][0]['candidateWeights']
+
+leak_mut_hist = [dict(d) for d in leak_base_hist]
+rng_mut = random.Random(7777)
+for d in leak_mut_hist:
+    if d['draw'] >= f1_val_start_draw:
+        nums = sorted(rng_mut.sample(range(1, 46), 6))
+        bonus = rng_mut.choice([n for n in range(1, 46) if n not in nums])
+        d['numbers'] = nums
+        d['bonus'] = bonus
+
+# Re-run quick research on mutated future data (from valStart onward)
+r_leak_mut = json.loads(m.quick_research(json.dumps(leak_mut_hist), 40))
+# Fold 1 train draws, train bounds, and learned candidate weights must be strictly identical
+assert r_leak_base['folds'][0]['trainDraws'] == r_leak_mut['folds'][0]['trainDraws']
+assert r_leak_base['folds'][0]['trainStartDraw'] == r_leak_mut['folds'][0]['trainStartDraw']
+assert r_leak_base['folds'][0]['trainEndDraw'] == r_leak_mut['folds'][0]['trainEndDraw']
+assert r_leak_base['folds'][0]['candidateWeights'] == r_leak_mut['folds'][0]['candidateWeights']
+for mid, w in f1_base_weights.items():
+    assert abs(w - r_leak_mut['folds'][0]['candidateWeights'][mid]) < 1e-12
+
+# Test 5B: Future-data mutation strictly after Fold 1 valEnd leaves Fold 1 weights AND validation metrics identical
+f1_val_end_draw = r_leak_base['folds'][0]['valEndDraw']
+leak_post_f1_hist = [dict(d) for d in leak_base_hist]
+rng_mut_b = random.Random(8888)
+for d in leak_post_f1_hist:
+    if d['draw'] > f1_val_end_draw:
+        nums = sorted(rng_mut_b.sample(range(1, 46), 6))
+        bonus = rng_mut_b.choice([n for n in range(1, 46) if n not in nums])
+        d['numbers'] = nums
+        d['bonus'] = bonus
+
+r_post_f1_mut = json.loads(m.quick_research(json.dumps(leak_post_f1_hist), 40))
+assert r_leak_base['folds'][0]['candidateWeights'] == r_post_f1_mut['folds'][0]['candidateWeights']
+assert r_leak_base['folds'][0]['baseScore'] == r_post_f1_mut['folds'][0]['baseScore']
+assert r_leak_base['folds'][0]['candidateScore'] == r_post_f1_mut['folds'][0]['candidateScore']
+assert r_leak_base['folds'][0]['gain'] == r_post_f1_mut['folds'][0]['gain']
+
+# Test 5C: Mutate only the final holdout draws: ALL 3 fold details, weights and fold metrics remain 100% identical
+holdout_start_idx = len(leak_base_hist) - r_leak_base['holdoutDraws']
+leak_hold_mut = [dict(d) for d in leak_base_hist]
+for idx in range(holdout_start_idx, len(leak_base_hist)):
+    nums = sorted(rng_mut.sample(range(1, 46), 6))
+    bonus = rng_mut.choice([n for n in range(1, 46) if n not in nums])
+    leak_hold_mut[idx]['numbers'] = nums
+    leak_hold_mut[idx]['bonus'] = bonus
+
+r_hold_mut = json.loads(m.quick_research(json.dumps(leak_hold_mut), 40))
+for i in range(3):
+    assert r_leak_base['folds'][i] == r_hold_mut['folds'][i], f"Fold {i+1} changed when modifying only final holdout"
+assert r_leak_base['foldWins'] == r_hold_mut['foldWins']
+assert r_leak_base['foldTies'] == r_hold_mut['foldTies']
+assert r_leak_base['foldLosses'] == r_hold_mut['foldLosses']
+assert abs(r_leak_base['meanFoldGain'] - r_hold_mut['meanFoldGain']) < 1e-9
+assert abs(r_leak_base['worstFoldGain'] - r_hold_mut['worstFoldGain']) < 1e-9
+
+# Test 6: 2/3 wins + positive mean + acceptable worst fold + final holdout win CAN promote
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.8,
+    full_equal=0.75, full_candidate=0.76,
+    fold_wins=2, mean_fold_gain=0.03, worst_fold_gain=-0.02
+) is True
+
+# Test 7: 1/3 wins CANNOT promote (requires at least 2 wins)
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.8,
+    full_equal=0.75, full_candidate=0.76,
+    fold_wins=1, mean_fold_gain=0.03, worst_fold_gain=0.0
+) is False
+
+# Test 8: Negative mean gain CANNOT promote
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.8,
+    full_equal=0.75, full_candidate=0.76,
+    fold_wins=2, mean_fold_gain=-0.001, worst_fold_gain=0.0
+) is False
+
+# Test 9: worstFoldGain < -0.05 CANNOT promote, but >= -0.05 CAN promote
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.8,
+    full_equal=0.75, full_candidate=0.76,
+    fold_wins=2, mean_fold_gain=0.05, worst_fold_gain=-0.051
+) is False
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.8,
+    full_equal=0.75, full_candidate=0.76,
+    fold_wins=2, mean_fold_gain=0.05, worst_fold_gain=-0.05
+) is True
+
+# Test 10: Tied final holdout CANNOT promote
+assert m._eval_promotion_gate(
+    hold_equal=0.7, hold_candidate=0.7,
+    full_equal=0.75, full_candidate=0.80,
+    fold_wins=3, mean_fold_gain=0.10, worst_fold_gain=0.05
+) is False
+
+# Test 11: Insufficient history returns HOLD with Korean reason
+short_hist = mk(5555, 60) # less than 100 draws
+r_short = json.loads(m.quick_research(json.dumps(short_hist), 40))
+assert r_short['promoted'] is False
+assert r_short['primaryReason'] == '검증 이력 부족'
+assert '검증 이력 부족' in r_short['message']
+
+# Test 12: Existing real-data target draw 1244 remains deterministic
+dummy_1243 = mk(9999, 1243)
+r_1244_a = json.loads(m.quick_research(json.dumps(dummy_1243), 40))
+r_1244_b = json.loads(m.quick_research(json.dumps(dummy_1243), 40))
+assert r_1244_a == r_1244_b, "Real-data scale research must remain 100% deterministic"
 
 # Representative performance smoke test. These timings are informational, not CI limits.
 large = mk(9001, 1000)

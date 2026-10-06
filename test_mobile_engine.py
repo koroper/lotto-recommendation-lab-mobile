@@ -28,6 +28,13 @@ assert all(len(g["numbers"]) == 6 for g in rec["games"])
 research = json.loads(mobile_engine.quick_research(history_json, 20))
 assert "weights" in research
 assert abs(sum(research["weights"].values()) - 1.0) < 1e-8
+assert research["foldCount"] == 3
+assert len(research["folds"]) == 3
+assert "meanFoldGain" in research
+assert "worstFoldGain" in research
+assert "finalHoldoutGain" in research
+assert "candidateWeights" in research["folds"][0]
+assert abs(sum(research["folds"][0]["candidateWeights"].values()) - 1.0) < 1e-8
 
 print("MOBILE ENGINE TEST OK")
 print("추천안:", rec["recommendationId"])

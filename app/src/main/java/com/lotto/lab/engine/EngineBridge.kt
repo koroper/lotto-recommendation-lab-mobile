@@ -65,15 +65,41 @@ object EngineBridge {
     fun quickResearch(historyJson: String, testDraws: Int = 40): ResearchResult {
         val raw = module().callAttr("quick_research", historyJson, testDraws).toString()
         val o = JSONObject(raw)
+        val foldsArray = o.optJSONArray("folds")
+        val foldsList = if (foldsArray != null) {
+            (0 until foldsArray.length()).map { i ->
+                val f = foldsArray.getJSONObject(i)
+                ValidationFold(
+                    fold = f.getInt("fold"),
+                    trainDraws = f.getInt("trainDraws"),
+                    valDraws = f.getInt("valDraws"),
+                    baseScore = f.getDouble("baseScore"),
+                    candidateScore = f.getDouble("candidateScore"),
+                    gain = f.getDouble("gain")
+                )
+            }
+        } else {
+            emptyList()
+        }
+
         return ResearchResult(
             promoted = o.getBoolean("promoted"),
             message = o.getString("message"),
             weightsJson = o.getJSONObject("weights").toString(),
-            testedDraws = o.getInt("testedDraws"),
-            fullEqual = o.getDouble("fullEqual"),
-            fullCandidate = o.getDouble("fullCandidate"),
-            holdoutEqual = o.getDouble("holdoutEqual"),
-            holdoutCandidate = o.getDouble("holdoutCandidate")
+            testedDraws = o.optInt("testedDraws", 0),
+            fullEqual = o.optDouble("fullEqual", 0.0),
+            fullCandidate = o.optDouble("fullCandidate", 0.0),
+            holdoutEqual = o.optDouble("holdoutEqual", 0.0),
+            holdoutCandidate = o.optDouble("holdoutCandidate", 0.0),
+            foldCount = o.optInt("foldCount", foldsList.size),
+            foldWins = o.optInt("foldWins", 0),
+            foldTies = o.optInt("foldTies", 0),
+            foldLosses = o.optInt("foldLosses", 0),
+            meanFoldGain = o.optDouble("meanFoldGain", 0.0),
+            worstFoldGain = o.optDouble("worstFoldGain", 0.0),
+            finalHoldoutGain = o.optDouble("finalHoldoutGain", o.optDouble("holdoutGain", 0.0)),
+            primaryReason = if (o.has("primaryReason") && !o.isNull("primaryReason")) o.getString("primaryReason") else null,
+            folds = foldsList
         )
     }
 }

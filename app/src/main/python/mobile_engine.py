@@ -489,20 +489,120 @@ def recommend(history_json, weights_json="", config_json=""):
     }, ensure_ascii=False)
 
 
-def _eval_promotion_gate(hold_equal, hold_candidate, full_equal, full_candidate, eps=1e-9):
+WORST_FOLD_GAIN_THRESHOLD = -0.05
+EPSILON = 1e-9
+
+
+def _derive_candidate_weights(subset_frames, mids):
+    if not subset_frames:
+        equal = {m: 1.0 / len(mids) for m in mids}
+        return equal, {m: 0.0 for m in mids}
+    model_avg = {
+        m: sum(f["matches"][m] for f in subset_frames) / len(subset_frames)
+        for m in mids
+    }
+    mean_avg = sum(model_avg.values()) / len(mids)
+    exps = {m: math.exp((model_avg[m] - mean_avg) * 2.5) for m in mids}
+    s = sum(exps.values()) or 1.0
+    learned = {m: exps[m] / s for m in mids}
+    equal = {m: 1.0 / len(mids) for m in mids}
+    candidate = {m: 0.5 * learned[m] + 0.5 * equal[m] for m in mids}
+    return candidate, model_avg
+
+
+def _ensemble_avg(part, weights, mids):
+    hits = []
+    for f in part:
+        combined = {
+            n: sum(f["scores"][m][n] * weights[m] for m in mids)
+            for n in range(1, 46)
+        }
+        top = sorted(combined, key=lambda n: (-combined[n], n))[:6]
+        hits.append(len(f["actual"] & set(top)))
+    return sum(hits) / len(hits) if hits else 0.0
+
+
+def _eval_promotion_gate(
+    hold_equal,
+    hold_candidate,
+    full_equal,
+    full_candidate,
+    fold_wins=2,
+    mean_fold_gain=0.01,
+    worst_fold_gain=0.0,
+    eps=EPSILON,
+    min_fold_wins=2,
+    worst_fold_threshold=WORST_FOLD_GAIN_THRESHOLD
+):
     holdout_better = (hold_candidate - hold_equal) > eps
     full_non_degraded = (full_candidate - full_equal) >= -eps
-    return bool(holdout_better and full_non_degraded)
+    fold_wins_ok = fold_wins is not None and fold_wins >= min_fold_wins
+    mean_gain_ok = mean_fold_gain is not None and mean_fold_gain > eps
+    worst_fold_ok = worst_fold_gain is not None and worst_fold_gain >= worst_fold_threshold - eps
+    return bool(holdout_better and full_non_degraded and fold_wins_ok and mean_gain_ok and worst_fold_ok)
+
+
+def _determine_primary_reason(
+    has_sufficient_history,
+    hold_equal,
+    hold_candidate,
+    full_equal,
+    full_candidate,
+    fold_wins,
+    mean_fold_gain,
+    worst_fold_gain,
+    eps=EPSILON,
+    min_fold_wins=2,
+    worst_fold_threshold=WORST_FOLD_GAIN_THRESHOLD
+):
+    if not has_sufficient_history:
+        return "검증 이력 부족"
+    if (hold_candidate - hold_equal) <= eps:
+        return "최종 홀드아웃 미개선"
+    if fold_wins < min_fold_wins or mean_fold_gain <= eps:
+        return "반복 검증 불안정"
+    if worst_fold_gain < worst_fold_threshold - eps:
+        return "일부 구간 성능 저하 과다"
+    if (full_candidate - full_equal) < -eps:
+        return "전체 성능 저하"
+    return None
 
 
 def quick_research(history_json, test_draws=40):
+    mids = list(MODELS)
+    equal = {m: 1.0 / len(mids) for m in mids}
     history = _parse_history(history_json)
     available = len(history) - 80
-    if available < 20:
-        raise ValueError("빠른 연구에는 최소 100회 이상의 데이터가 필요합니다.")
+
+    if available < 20 or len(history) < 100:
+        return json.dumps({
+            "promoted": False,
+            "primaryReason": "검증 이력 부족",
+            "message": "검증 이력 부족으로 기본 가중치를 유지합니다. (최소 100회 이상 필요)",
+            "weights": equal,
+            "modelAverageMatches": {m: 0.0 for m in mids},
+            "fullEqual": 0.0,
+            "fullCandidate": 0.0,
+            "holdoutEqual": 0.0,
+            "holdoutCandidate": 0.0,
+            "testedDraws": len(history),
+            "trainingDraws": 0,
+            "holdoutDraws": 0,
+            "fullGain": 0.0,
+            "holdoutGain": 0.0,
+            "foldCount": 0,
+            "foldWins": 0,
+            "foldTies": 0,
+            "foldLosses": 0,
+            "meanFoldGain": 0.0,
+            "worstFoldGain": 0.0,
+            "finalHoldoutGain": 0.0,
+            "worstFoldThreshold": WORST_FOLD_GAIN_THRESHOLD,
+            "folds": []
+        }, ensure_ascii=False)
+
     test_draws = min(max(20, int(test_draws)), 60, available)
     start = len(history) - test_draws
-    mids = list(MODELS)
     frames = []
 
     for idx in range(start, len(history)):
@@ -510,6 +610,7 @@ def quick_research(history_json, test_draws=40):
         actual = set(history[idx]["numbers"])
         _, scores, ranks, _, _ = _model_scores(train)
         frames.append({
+            "draw": history[idx]["draw"],
             "scores": scores,
             "actual": actual,
             "matches": {
@@ -523,53 +624,127 @@ def quick_research(history_json, test_draws=40):
     train_frames = frames[:split]
     holdout = frames[split:]
 
-    # Derive model_avg, learned weights, and candidate weights ONLY from train_frames
-    model_avg = {
-        m: sum(f["matches"][m] for f in train_frames) / len(train_frames)
-        for m in mids
-    }
-    mean_avg = sum(model_avg.values()) / len(mids)
-    exps = {m: math.exp((model_avg[m] - mean_avg) * 2.5) for m in mids}
-    s = sum(exps.values())
-    learned = {m: exps[m] / s for m in mids}
-    equal = {m: 1.0 / len(mids) for m in mids}
-    candidate = {m: 0.5 * learned[m] + 0.5 * equal[m] for m in mids}
+    # Final candidate weights learned ONLY from train_frames
+    candidate, model_avg = _derive_candidate_weights(train_frames, mids)
 
-    def ensemble_avg(part, weights):
-        hits = []
-        for f in part:
-            combined = {
-                n: sum(f["scores"][m][n] * weights[m] for m in mids)
-                for n in range(1, 46)
-            }
-            top = sorted(combined, key=lambda n: (-combined[n], n))[:6]
-            hits.append(len(f["actual"] & set(top)))
-        return sum(hits) / len(hits) if hits else 0.0
+    # 3 Chronological Walk-Forward Validation Folds within train_frames
+    val_size = len(train_frames) // 6
+    can_construct_folds = len(train_frames) >= 12 and val_size >= 2 and len(holdout) >= 2
 
-    full_equal = ensemble_avg(frames, equal)
-    full_candidate = ensemble_avg(frames, candidate)
-    hold_equal = ensemble_avg(holdout, equal)
-    hold_candidate = ensemble_avg(holdout, candidate)
+    if not can_construct_folds:
+        return json.dumps({
+            "promoted": False,
+            "primaryReason": "검증 이력 부족",
+            "message": "검증 이력이 부족하여 기본 가중치를 유지합니다. (충분한 검증 폴드 구성 불가)",
+            "weights": equal,
+            "modelAverageMatches": model_avg,
+            "fullEqual": 0.0,
+            "fullCandidate": 0.0,
+            "holdoutEqual": 0.0,
+            "holdoutCandidate": 0.0,
+            "testedDraws": len(frames),
+            "trainingDraws": len(train_frames),
+            "holdoutDraws": len(holdout),
+            "fullGain": 0.0,
+            "holdoutGain": 0.0,
+            "foldCount": 0,
+            "foldWins": 0,
+            "foldTies": 0,
+            "foldLosses": 0,
+            "meanFoldGain": 0.0,
+            "worstFoldGain": 0.0,
+            "finalHoldoutGain": 0.0,
+            "worstFoldThreshold": WORST_FOLD_GAIN_THRESHOLD,
+            "folds": []
+        }, ensure_ascii=False)
 
-    eps = 1e-9
-    promoted = _eval_promotion_gate(hold_equal, hold_candidate, full_equal, full_candidate, eps)
-    final_weights = candidate if promoted else equal
+    folds = []
+    eps = EPSILON
+    for i in range(3):
+        val_start = len(train_frames) - (3 - i) * val_size
+        val_end = val_start + val_size
+        f_train = train_frames[:val_start]
+        f_val = train_frames[val_start:val_end]
+
+        # Candidate weights for each fold derived ONLY from that fold's training data
+        f_cand, _ = _derive_candidate_weights(f_train, mids)
+        base_score = _ensemble_avg(f_val, equal, mids)
+        cand_score = _ensemble_avg(f_val, f_cand, mids)
+        gain = cand_score - base_score
+
+        folds.append({
+            "fold": i + 1,
+            "trainDraws": len(f_train),
+            "valDraws": len(f_val),
+            "trainStartDraw": f_train[0]["draw"],
+            "trainEndDraw": f_train[-1]["draw"],
+            "valStartDraw": f_val[0]["draw"],
+            "valEndDraw": f_val[-1]["draw"],
+            "baseScore": round(base_score, 3),
+            "candidateScore": round(cand_score, 3),
+            "gain": round(gain, 4),
+            "candidateWeights": f_cand
+        })
+
+    fold_wins = sum(1 for f in folds if f["gain"] > eps)
+    fold_ties = sum(1 for f in folds if abs(f["gain"]) <= eps)
+    fold_losses = sum(1 for f in folds if f["gain"] < -eps)
+    mean_fold_gain = sum(f["gain"] for f in folds) / len(folds)
+    worst_fold_gain = min(f["gain"] for f in folds)
+
+    full_equal = _ensemble_avg(frames, equal, mids)
+    full_candidate = _ensemble_avg(frames, candidate, mids)
+    hold_equal = _ensemble_avg(holdout, equal, mids)
+    hold_candidate = _ensemble_avg(holdout, candidate, mids)
 
     full_gain = full_candidate - full_equal
     holdout_gain = hold_candidate - hold_equal
 
+    promoted = _eval_promotion_gate(
+        hold_equal=hold_equal,
+        hold_candidate=hold_candidate,
+        full_equal=full_equal,
+        full_candidate=full_candidate,
+        fold_wins=fold_wins,
+        mean_fold_gain=mean_fold_gain,
+        worst_fold_gain=worst_fold_gain,
+        eps=eps
+    )
+    final_weights = candidate if promoted else equal
+
+    primary_reason = None
     if promoted:
         message = "빠른 연구 보정 가중치를 적용합니다."
-    elif abs(hold_candidate - hold_equal) <= eps:
-        message = "독립 홀드아웃 검증에서 동점으로 개선이 없어 기본 가중치를 유지합니다."
-    elif hold_candidate < hold_equal:
-        message = "독립 홀드아웃 검증에서 개선이 없어 기본 가중치를 유지합니다."
     else:
-        message = "전체 기간 검증에서 성능이 저하되어 기본 가중치를 유지합니다."
+        primary_reason = _determine_primary_reason(
+            has_sufficient_history=True,
+            hold_equal=hold_equal,
+            hold_candidate=hold_candidate,
+            full_equal=full_equal,
+            full_candidate=full_candidate,
+            fold_wins=fold_wins,
+            mean_fold_gain=mean_fold_gain,
+            worst_fold_gain=worst_fold_gain,
+            eps=eps
+        )
+        if primary_reason == "최종 홀드아웃 미개선":
+            if abs(hold_candidate - hold_equal) <= eps:
+                message = "독립 홀드아웃 검증에서 동점으로 개선이 없어 기본 가중치를 유지합니다."
+            else:
+                message = "독립 홀드아웃 검증에서 개선이 없어 기본 가중치를 유지합니다."
+        elif primary_reason == "반복 검증 불안정":
+            message = "반복 검증에서 안정적인 우세를 확보하지 못해 기본 가중치를 유지합니다."
+        elif primary_reason == "일부 구간 성능 저하 과다":
+            message = "일부 검증 구간에서 과도한 성능 저하가 발생하여 기본 가중치를 유지합니다."
+        elif primary_reason == "전체 성능 저하":
+            message = "전체 기간 검증에서 성능이 저하되어 기본 가중치를 유지합니다."
+        else:
+            message = "검증 기준을 충족하지 못해 기본 가중치를 유지합니다."
 
     return json.dumps({
         "promoted": promoted,
         "message": message,
+        "primaryReason": primary_reason,
         "weights": final_weights,
         "modelAverageMatches": model_avg,
         "fullEqual": round(full_equal, 3),
@@ -581,4 +756,13 @@ def quick_research(history_json, test_draws=40):
         "holdoutDraws": len(holdout),
         "fullGain": round(full_gain, 4),
         "holdoutGain": round(holdout_gain, 4),
+        "foldCount": len(folds),
+        "foldWins": fold_wins,
+        "foldTies": fold_ties,
+        "foldLosses": fold_losses,
+        "meanFoldGain": round(mean_fold_gain, 4),
+        "worstFoldGain": round(worst_fold_gain, 4),
+        "finalHoldoutGain": round(holdout_gain, 4),
+        "worstFoldThreshold": WORST_FOLD_GAIN_THRESHOLD,
+        "folds": folds,
     }, ensure_ascii=False)

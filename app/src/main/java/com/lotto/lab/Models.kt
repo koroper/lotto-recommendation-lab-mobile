@@ -31,6 +31,15 @@ data class RecommendationResult(
     val weightsJson: String
 )
 
+data class ValidationFold(
+    val fold: Int,
+    val trainDraws: Int,
+    val valDraws: Int,
+    val baseScore: Double,
+    val candidateScore: Double,
+    val gain: Double
+)
+
 data class ResearchResult(
     val promoted: Boolean,
     val message: String,
@@ -39,7 +48,16 @@ data class ResearchResult(
     val fullEqual: Double,
     val fullCandidate: Double,
     val holdoutEqual: Double,
-    val holdoutCandidate: Double
+    val holdoutCandidate: Double,
+    val foldCount: Int = 3,
+    val foldWins: Int = 0,
+    val foldTies: Int = 0,
+    val foldLosses: Int = 0,
+    val meanFoldGain: Double = 0.0,
+    val worstFoldGain: Double = 0.0,
+    val finalHoldoutGain: Double = 0.0,
+    val primaryReason: String? = null,
+    val folds: List<ValidationFold> = emptyList()
 )
 
 data class ConfirmedRecord(

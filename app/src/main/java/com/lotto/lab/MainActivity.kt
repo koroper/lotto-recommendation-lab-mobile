@@ -256,6 +256,10 @@ private fun SummaryCard(label: String, value: String, modifier: Modifier) {
     }
 }
 
+private fun formatSignedGain(v: Double): String {
+    return if (v >= 0) String.format(Locale.US, "+%.3f", v) else String.format(Locale.US, "%.3f", v)
+}
+
 @Composable
 fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
     LazyColumn(
@@ -264,7 +268,7 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Header("🧪 모바일 빠른 연구", "최근 과거 회차를 Walk-forward 방식으로 비교하고 홀드아웃을 통과한 가중치만 추천에 반영합니다.")
+            Header("🧪 모바일 빠른 연구", "최근 과거 회차를 다중 Walk-Forward 구간으로 반복 검증하고 홀드아웃을 통과한 가중치만 반영합니다.")
         }
         item {
             Button(
@@ -286,18 +290,68 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
             item {
                 Card(Modifier.padding(horizontal = 16.dp).fillMaxWidth()) {
                     Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(if (r.promoted) "✅ 연구 보정 적용" else "🟡 기본 가중치 유지", fontWeight = FontWeight.ExtraBold)
-                        Text(r.message)
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                if (r.promoted) "✅ 연구 보정 적용" else "🟡 기본 가중치 유지 (HOLD)",
+                                fontWeight = FontWeight.ExtraBold,
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (!r.promoted && r.primaryReason != null) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Text(
+                                        r.primaryReason,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                        Text(r.message, style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider()
-                        Text("검증 회차: ${r.testedDraws}회")
-                        Text("전체 · 기본 ${r.fullEqual} / 후보 ${r.fullCandidate}")
-                        Text("홀드아웃 · 기본 ${r.holdoutEqual} / 후보 ${r.holdoutCandidate}")
+
+                        if (r.foldCount > 0) {
+                            Text("반복 검증 ${r.foldCount}회", fontWeight = FontWeight.Bold)
+                            Text(
+                                "후보 우세 ${r.foldWins}회 · 동률 ${r.foldTies}회 · 열세 ${r.foldLosses}회",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "평균 개선 ${formatSignedGain(r.meanFoldGain)}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "최악 구간 ${formatSignedGain(r.worstFoldGain)}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "최종 홀드아웃 ${formatSignedGain(r.finalHoldoutGain)}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Text(
+                                "전체 검증 ${r.testedDraws}회 · 기본 ${r.fullEqual} / 후보 ${r.fullCandidate}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Text("검증 회차: ${r.testedDraws}회")
+                            Text("전체 · 기본 ${r.fullEqual} / 후보 ${r.fullCandidate}")
+                            Text("홀드아웃 · 기본 ${r.holdoutEqual} / 후보 ${r.holdoutCandidate}")
+                        }
                     }
                 }
             }
             item {
                 Text(
-                    "정밀 진화·Monte Carlo 연구는 모바일 후속 버전에서 백그라운드 작업으로 확장할 예정입니다.",
+                    "※ 검증 지표는 과거 회차 기준 모델 상대 점수이며, 미래 복권 당첨 확률 향상을 의미하지 않습니다.",
                     Modifier.padding(horizontal = 16.dp),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
