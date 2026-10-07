@@ -99,7 +99,10 @@ object EngineBridge {
             worstFoldGain = o.optDouble("worstFoldGain", 0.0),
             finalHoldoutGain = o.optDouble("finalHoldoutGain", o.optDouble("holdoutGain", 0.0)),
             primaryReason = if (o.has("primaryReason") && !o.isNull("primaryReason")) o.getString("primaryReason") else null,
-            folds = foldsList
+            folds = foldsList,
+            searchCandidateCount = o.optInt("searchCandidateCount", 0),
+            selectedCandidateWeightsJson = if (o.has("selectedCandidateWeights") && !o.isNull("selectedCandidateWeights")) o.getJSONObject("selectedCandidateWeights").toString() else null,
+            searchMethod = if (o.has("searchMethod") && !o.isNull("searchMethod")) o.getString("searchMethod") else null
         )
     }
 }

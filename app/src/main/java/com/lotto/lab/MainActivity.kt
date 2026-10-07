@@ -318,6 +318,14 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
                         Text(r.message, style = MaterialTheme.typography.bodyMedium)
                         HorizontalDivider()
 
+                        if (r.searchCandidateCount > 0) {
+                            Text(
+                                "후보 탐색 ${r.searchCandidateCount}개 · 선택된 가중치 검증",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
                         if (r.foldCount > 0) {
                             Text("반복 검증 ${r.foldCount}회", fontWeight = FontWeight.Bold)
                             Text(

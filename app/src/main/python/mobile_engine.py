@@ -510,6 +510,110 @@ def _derive_candidate_weights(subset_frames, mids):
     return candidate, model_avg
 
 
+def _generate_candidate_weights(training_slice, mids, perturbation_deltas=(0.025, 0.05)):
+    equal = {m: 1.0 / len(mids) for m in mids}
+    seed, _ = _derive_candidate_weights(training_slice, mids)
+
+    candidates = [
+        ("equal", dict(equal)),
+        ("learned_seed", dict(seed))
+    ]
+
+    for m_add in mids:
+        for m_sub in mids:
+            if m_add == m_sub:
+                continue
+            for delta in perturbation_deltas:
+                w = dict(seed)
+                w[m_add] += delta
+                w[m_sub] -= delta
+                if any(v < -1e-9 for v in w.values()):
+                    continue
+                for m in mids:
+                    if w[m] < 0.0:
+                        w[m] = 0.0
+                tot = sum(w.values())
+                if tot <= 0:
+                    continue
+                normalized = {m: w[m] / tot for m in mids}
+                candidates.append((f"transfer_{m_add}_{m_sub}_{delta}", normalized))
+
+    return candidates
+
+
+def _select_search_candidate(candidates_list, fold_candidates_lists, folds_data, equal, mids, eps=EPSILON):
+    """
+    Evaluates each candidate template across 3 validation folds and selects the best one deterministically.
+    Matching across folds is strictly by template name.
+    If a template is missing/unavailable in any fold, it is safely excluded from cross-fold selection.
+
+    Priority:
+    1. highest fold wins
+    2. highest mean fold gain
+    3. highest worst fold gain
+    4. smallest mean fold-local L1 distance from equal weights
+    5. stable lexical candidate-template name
+    """
+    fold_candidates_maps = [
+        {name: w for name, w in fold_cands}
+        for fold_cands in fold_candidates_lists
+    ]
+
+    evaluated = []
+    for name, global_w in candidates_list:
+        if not all(name in f_map for f_map in fold_candidates_maps):
+            continue
+
+        gains = []
+        fold_details = []
+        fold_l1s = []
+        for f_idx, (f_train, f_val) in enumerate(folds_data):
+            f_cand_w = fold_candidates_maps[f_idx][name]
+            base_score = _ensemble_avg(f_val, equal, mids)
+            cand_score = _ensemble_avg(f_val, f_cand_w, mids)
+            gain = cand_score - base_score
+            gains.append(gain)
+            l1_fold = sum(abs(f_cand_w[m] - equal[m]) for m in mids)
+            fold_l1s.append(l1_fold)
+            fold_details.append({
+                "baseScore": base_score,
+                "candidateScore": cand_score,
+                "gain": gain,
+                "candidateWeights": f_cand_w
+            })
+
+        wins = sum(1 for g in gains if g > eps)
+        ties = sum(1 for g in gains if abs(g) <= eps)
+        losses = sum(1 for g in gains if g < -eps)
+        mean_g = sum(gains) / len(gains)
+        worst_g = min(gains)
+        mean_fold_l1 = sum(fold_l1s) / len(fold_l1s)
+
+        evaluated.append({
+            "name": name,
+            "global_weights": global_w,
+            "fold_wins": wins,
+            "fold_ties": ties,
+            "fold_losses": losses,
+            "mean_fold_gain": mean_g,
+            "worst_fold_gain": worst_g,
+            "mean_fold_l1": mean_fold_l1,
+            "fold_details": fold_details
+        })
+
+    def rank_key(c):
+        return (
+            -c["fold_wins"],
+            -round(c["mean_fold_gain"], 6),
+            -round(c["worst_fold_gain"], 6),
+            round(c["mean_fold_l1"], 6),
+            c["name"]
+        )
+
+    evaluated.sort(key=rank_key)
+    return evaluated[0], evaluated
+
+
 def _ensemble_avg(part, weights, mids):
     hits = []
     for f in part:
@@ -624,14 +728,12 @@ def quick_research(history_json, test_draws=40):
     train_frames = frames[:split]
     holdout = frames[split:]
 
-    # Final candidate weights learned ONLY from train_frames
-    candidate, model_avg = _derive_candidate_weights(train_frames, mids)
-
     # 3 Chronological Walk-Forward Validation Folds within train_frames
     val_size = len(train_frames) // 6
     can_construct_folds = len(train_frames) >= 12 and val_size >= 2 and len(holdout) >= 2
 
     if not can_construct_folds:
+        _, model_avg = _derive_candidate_weights(train_frames, mids)
         return json.dumps({
             "promoted": False,
             "primaryReason": "검증 이력 부족",
@@ -655,23 +757,46 @@ def quick_research(history_json, test_draws=40):
             "worstFoldGain": 0.0,
             "finalHoldoutGain": 0.0,
             "worstFoldThreshold": WORST_FOLD_GAIN_THRESHOLD,
-            "folds": []
+            "folds": [],
+            "searchCandidateCount": 0,
+            "selectedCandidateWeights": equal,
+            "searchMethod": "deterministic_pairwise_local_search"
         }, ensure_ascii=False)
 
-    folds = []
-    eps = EPSILON
+    folds_data = []
     for i in range(3):
         val_start = len(train_frames) - (3 - i) * val_size
         val_end = val_start + val_size
         f_train = train_frames[:val_start]
         f_val = train_frames[val_start:val_end]
+        folds_data.append((f_train, f_val))
 
-        # Candidate weights for each fold derived ONLY from that fold's training data
+    # Deterministic local candidate search:
+    # 1. Candidate weights for each fold derived ONLY from that fold's training slice f_train
+    # 2. Global candidates derived ONLY from train_frames (never touching untouched holdout)
+    global_candidates = _generate_candidate_weights(train_frames, mids)
+    fold_candidates_lists = [
+        _generate_candidate_weights(f_train, mids)
+        for f_train, _ in folds_data
+    ]
+
+    eps = EPSILON
+    best_cand, all_evaluated = _select_search_candidate(
+        candidates_list=global_candidates,
+        fold_candidates_lists=fold_candidates_lists,
+        folds_data=folds_data,
+        equal=equal,
+        mids=mids,
+        eps=eps
+    )
+    selected_candidate_weights = best_cand["global_weights"]
+    _, model_avg = _derive_candidate_weights(train_frames, mids)
+
+    folds = []
+    for i in range(3):
+        f_train, f_val = folds_data[i]
         f_cand, _ = _derive_candidate_weights(f_train, mids)
-        base_score = _ensemble_avg(f_val, equal, mids)
-        cand_score = _ensemble_avg(f_val, f_cand, mids)
-        gain = cand_score - base_score
-
+        f_detail = best_cand["fold_details"][i]
         folds.append({
             "fold": i + 1,
             "trainDraws": len(f_train),
@@ -680,22 +805,23 @@ def quick_research(history_json, test_draws=40):
             "trainEndDraw": f_train[-1]["draw"],
             "valStartDraw": f_val[0]["draw"],
             "valEndDraw": f_val[-1]["draw"],
-            "baseScore": round(base_score, 3),
-            "candidateScore": round(cand_score, 3),
-            "gain": round(gain, 4),
-            "candidateWeights": f_cand
+            "baseScore": round(f_detail["baseScore"], 3),
+            "candidateScore": round(f_detail["candidateScore"], 3),
+            "gain": round(f_detail["gain"], 4),
+            "candidateWeights": f_cand,
+            "searchCandidateWeights": f_detail["candidateWeights"]
         })
 
-    fold_wins = sum(1 for f in folds if f["gain"] > eps)
-    fold_ties = sum(1 for f in folds if abs(f["gain"]) <= eps)
-    fold_losses = sum(1 for f in folds if f["gain"] < -eps)
-    mean_fold_gain = sum(f["gain"] for f in folds) / len(folds)
-    worst_fold_gain = min(f["gain"] for f in folds)
+    fold_wins = best_cand["fold_wins"]
+    fold_ties = best_cand["fold_ties"]
+    fold_losses = best_cand["fold_losses"]
+    mean_fold_gain = best_cand["mean_fold_gain"]
+    worst_fold_gain = best_cand["worst_fold_gain"]
 
     full_equal = _ensemble_avg(frames, equal, mids)
-    full_candidate = _ensemble_avg(frames, candidate, mids)
+    full_candidate = _ensemble_avg(frames, selected_candidate_weights, mids)
     hold_equal = _ensemble_avg(holdout, equal, mids)
-    hold_candidate = _ensemble_avg(holdout, candidate, mids)
+    hold_candidate = _ensemble_avg(holdout, selected_candidate_weights, mids)
 
     full_gain = full_candidate - full_equal
     holdout_gain = hold_candidate - hold_equal
@@ -710,7 +836,7 @@ def quick_research(history_json, test_draws=40):
         worst_fold_gain=worst_fold_gain,
         eps=eps
     )
-    final_weights = candidate if promoted else equal
+    final_weights = selected_candidate_weights if promoted else equal
 
     primary_reason = None
     if promoted:
@@ -765,4 +891,7 @@ def quick_research(history_json, test_draws=40):
         "finalHoldoutGain": round(holdout_gain, 4),
         "worstFoldThreshold": WORST_FOLD_GAIN_THRESHOLD,
         "folds": folds,
+        "searchCandidateCount": len(all_evaluated),
+        "selectedCandidateWeights": selected_candidate_weights,
+        "searchMethod": "deterministic_pairwise_local_search"
     }, ensure_ascii=False)

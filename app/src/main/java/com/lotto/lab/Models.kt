@@ -57,7 +57,10 @@ data class ResearchResult(
     val worstFoldGain: Double = 0.0,
     val finalHoldoutGain: Double = 0.0,
     val primaryReason: String? = null,
-    val folds: List<ValidationFold> = emptyList()
+    val folds: List<ValidationFold> = emptyList(),
+    val searchCandidateCount: Int = 0,
+    val selectedCandidateWeightsJson: String? = null,
+    val searchMethod: String? = null
 )
 
 data class ConfirmedRecord(

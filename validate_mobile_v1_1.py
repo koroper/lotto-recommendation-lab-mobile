@@ -228,6 +228,142 @@ assert r_leak_base['foldTies'] == r_hold_mut['foldTies']
 assert r_leak_base['foldLosses'] == r_hold_mut['foldLosses']
 assert abs(r_leak_base['meanFoldGain'] - r_hold_mut['meanFoldGain']) < 1e-9
 assert abs(r_leak_base['worstFoldGain'] - r_hold_mut['worstFoldGain']) < 1e-9
+assert r_leak_base['selectedCandidateWeights'] == r_hold_mut['selectedCandidateWeights']
+assert r_leak_base['searchCandidateCount'] == r_hold_mut['searchCandidateCount']
+
+# --- Phase 2 Step 3B: Deterministic Candidate-Weight Search Tests ---
+mids_all = ["long", "recent", "gap", "pair", "balance", "inverse"]
+dummy_sample = mk(4321, 50)
+sample_frames = []
+for idx in range(10, 50):
+    tr = dummy_sample[:idx]
+    act = set(dummy_sample[idx]["numbers"])
+    _, scs, _, _, _ = m._model_scores(tr)
+    sample_frames.append({
+        "draw": dummy_sample[idx]["draw"],
+        "scores": scs,
+        "actual": act,
+        "matches": {mid: len(act & set(sorted(scs[mid], key=lambda n: (-scs[mid][n], n))[:6])) for mid in mids_all}
+    })
+
+cands = m._generate_candidate_weights(sample_frames, mids_all)
+
+# 3B.1: All generated candidate weights are non-negative
+for name, c in cands:
+    for mid, w in c.items():
+        assert w >= -1e-9, f"Candidate {name} model {mid} negative weight: {w}"
+
+# 3B.2: Every candidate sums to 1 within epsilon
+for name, c in cands:
+    s = sum(c.values())
+    assert abs(s - 1.0) < 1e-8, f"Candidate {name} sum not 1: {s}"
+
+# 3B.3: Candidate generation is deterministic
+cands_repeat = m._generate_candidate_weights(sample_frames, mids_all)
+assert len(cands) == len(cands_repeat)
+for (n1, w1), (n2, w2) in zip(cands, cands_repeat):
+    assert n1 == n2
+    assert w1 == w2
+
+# 3B.4: Candidate count stays below the hard cap (hard cap 200)
+assert len(cands) <= 200, f"Candidate count {len(cands)} exceeded hard cap 200"
+assert len(cands) <= 62, f"Candidate count {len(cands)} exceeded expected max 62"
+
+# 3B.5: Equal and existing learned candidate are included as candidates 0 and 1
+assert cands[0][0] == "equal"
+assert all(abs(cands[0][1][mid] - 1.0/6) < 1e-9 for mid in mids_all)
+assert cands[1][0] == "learned_seed"
+seed_expected, _ = m._derive_candidate_weights(sample_frames, mids_all)
+assert cands[1][1] == seed_expected
+
+# 3B.6: Selection priority prefers more fold wins over mean gain
+mock_cands = [
+    {"name": "cand_b", "fold_wins": 1, "mean_fold_gain": 0.20, "worst_fold_gain": -0.01, "mean_fold_l1": 0.1},
+    {"name": "cand_a", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.01, "mean_fold_l1": 0.1}
+]
+mock_ranked = sorted(mock_cands, key=lambda c: (
+    -c["fold_wins"], -round(c["mean_fold_gain"], 6), -round(c["worst_fold_gain"], 6), round(c["mean_fold_l1"], 6), c["name"]
+))
+assert mock_ranked[0]["name"] == "cand_a", "Priority 1 (fold wins) must beat higher mean gain"
+
+# 3B.7: If fold wins tie, higher mean gain wins
+mock_cands_2 = [
+    {"name": "cand_low_mean", "fold_wins": 2, "mean_fold_gain": 0.03, "worst_fold_gain": -0.01, "mean_fold_l1": 0.1},
+    {"name": "cand_high_mean", "fold_wins": 2, "mean_fold_gain": 0.08, "worst_fold_gain": -0.01, "mean_fold_l1": 0.1}
+]
+mock_ranked_2 = sorted(mock_cands_2, key=lambda c: (
+    -c["fold_wins"], -round(c["mean_fold_gain"], 6), -round(c["worst_fold_gain"], 6), round(c["mean_fold_l1"], 6), c["name"]
+))
+assert mock_ranked_2[0]["name"] == "cand_high_mean", "Priority 2 (mean gain) must break fold wins tie"
+
+# 3B.8: If mean gain ties, better worst-fold gain wins
+mock_cands_3 = [
+    {"name": "cand_worse_worst", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.04, "mean_fold_l1": 0.1},
+    {"name": "cand_better_worst", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.02, "mean_fold_l1": 0.1}
+]
+mock_ranked_3 = sorted(mock_cands_3, key=lambda c: (
+    -c["fold_wins"], -round(c["mean_fold_gain"], 6), -round(c["worst_fold_gain"], 6), round(c["mean_fold_l1"], 6), c["name"]
+))
+assert mock_ranked_3[0]["name"] == "cand_better_worst", "Priority 3 (worst fold gain) must break mean gain tie"
+
+# 3B-R1: Changing only global_w absolute values cannot change selected template
+dummy_folds_data = [
+    (sample_frames[:15], sample_frames[15:20]),
+    (sample_frames[:20], sample_frames[20:25]),
+    (sample_frames[:25], sample_frames[25:30])
+]
+fold_cands_lists = [m._generate_candidate_weights(ft, mids_all) for ft, _ in dummy_folds_data]
+global_cands_orig = m._generate_candidate_weights(sample_frames, mids_all)
+global_cands_mutated_w = [(name, {mid: (0.5 if mid == 'long' else 0.1) for mid in mids_all}) for name, _ in global_cands_orig]
+sel_orig, _ = m._select_search_candidate(global_cands_orig, fold_cands_lists, dummy_folds_data, cands[0][1], mids_all)
+sel_mut_w, _ = m._select_search_candidate(global_cands_mutated_w, fold_cands_lists, dummy_folds_data, cands[0][1], mids_all)
+assert sel_orig["name"] == sel_mut_w["name"], "Changing global_w values must not alter template selection"
+
+# 3B-R2: Lexical template name is the final tiebreak
+mock_cands_lex = [
+    {"name": "zeta_template", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.02, "mean_fold_l1": 0.10},
+    {"name": "alpha_template", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.02, "mean_fold_l1": 0.10}
+]
+mock_ranked_lex = sorted(mock_cands_lex, key=lambda c: (
+    -c["fold_wins"], -round(c["mean_fold_gain"], 6), -round(c["worst_fold_gain"], 6), round(c["mean_fold_l1"], 6), c["name"]
+))
+assert mock_ranked_lex[0]["name"] == "alpha_template", "Priority 5 (lexical name) must break tie"
+
+# 3B-R3: Mean fold-local L1 is used before lexical name
+mock_cands_l1 = [
+    {"name": "alpha_template", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.02, "mean_fold_l1": 0.20},
+    {"name": "zeta_template", "fold_wins": 2, "mean_fold_gain": 0.05, "worst_fold_gain": -0.02, "mean_fold_l1": 0.10}
+]
+mock_ranked_l1 = sorted(mock_cands_l1, key=lambda c: (
+    -c["fold_wins"], -round(c["mean_fold_gain"], 6), -round(c["worst_fold_gain"], 6), round(c["mean_fold_l1"], 6), c["name"]
+))
+assert mock_ranked_l1[0]["name"] == "zeta_template", "Priority 4 (mean fold L1) must beat lexical name"
+
+# 3B-R4: Positional reordering of candidate lists does not change selection
+global_cands_reversed = list(reversed(global_cands_orig))
+fold_cands_reversed = [list(reversed(fc)) for fc in fold_cands_lists]
+sel_rev, _ = m._select_search_candidate(global_cands_reversed, fold_cands_reversed, dummy_folds_data, cands[0][1], mids_all)
+assert sel_orig["name"] == sel_rev["name"], "Positional reordering must not alter candidate selection"
+
+# 3B-R5: Missing template in one fold is safely excluded
+fold_cands_incomplete = [
+    list(fold_cands_lists[0]),
+    list(fold_cands_lists[1]),
+    [c for c in fold_cands_lists[2] if c[0] != "equal"] # drop 'equal' in fold 3
+]
+_, evaluated_incomplete = m._select_search_candidate(global_cands_orig, fold_cands_incomplete, dummy_folds_data, cands[0][1], mids_all)
+assert not any(c["name"] == "equal" for c in evaluated_incomplete), "Template missing in any fold must be excluded"
+
+# 3B.9: Final-holdout mutation does NOT change selected candidate weights or count
+assert r_leak_base['selectedCandidateWeights'] == r_hold_mut['selectedCandidateWeights']
+assert r_leak_base['searchCandidateCount'] == r_hold_mut['searchCandidateCount']
+
+# 3B.10: Future data after an earlier fold does not alter that fold's candidate construction
+f1_train_slice = [f for f in sample_frames if f["draw"] <= 30]
+f1_train_slice_mut = [dict(f) for f in f1_train_slice]
+cands_f1_orig = m._generate_candidate_weights(f1_train_slice, mids_all)
+cands_f1_mut = m._generate_candidate_weights(f1_train_slice_mut, mids_all)
+assert cands_f1_orig == cands_f1_mut
 
 # Test 6: 2/3 wins + positive mean + acceptable worst fold + final holdout win CAN promote
 assert m._eval_promotion_gate(

@@ -35,6 +35,10 @@ assert "worstFoldGain" in research
 assert "finalHoldoutGain" in research
 assert "candidateWeights" in research["folds"][0]
 assert abs(sum(research["folds"][0]["candidateWeights"].values()) - 1.0) < 1e-8
+assert research["searchCandidateCount"] > 0
+assert "selectedCandidateWeights" in research
+assert abs(sum(research["selectedCandidateWeights"].values()) - 1.0) < 1e-8
+assert research.get("searchMethod") == "deterministic_pairwise_local_search"
 
 print("MOBILE ENGINE TEST OK")
 print("추천안:", rec["recommendationId"])
