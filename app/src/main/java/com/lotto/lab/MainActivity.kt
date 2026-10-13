@@ -295,12 +295,13 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val isEffectivelyPromoted = r.promoted && !r.isLegacyRecord
                             Text(
-                                if (r.promoted) "✅ 연구 보정 적용" else "🟡 기본 가중치 유지 (HOLD)",
+                                if (isEffectivelyPromoted) "✅ 연구 보정 적용" else "🟡 기본 가중치 유지 (HOLD)",
                                 fontWeight = FontWeight.ExtraBold,
                                 style = MaterialTheme.typography.titleMedium
                             )
-                            if (!r.promoted && r.primaryReason != null) {
+                            if (!isEffectivelyPromoted && r.primaryReason != null) {
                                 Surface(
                                     color = MaterialTheme.colorScheme.errorContainer,
                                     shape = RoundedCornerShape(6.dp)
@@ -344,6 +345,18 @@ fun ResearchScreen(state: AppUiState, vm: MainViewModel) {
                                 "최종 홀드아웃 ${formatSignedGain(r.finalHoldoutGain)}",
                                 style = MaterialTheme.typography.bodyMedium
                             )
+                            if (!r.isLegacyRecord) {
+                                val advSigned = if (r.holdoutTotalMatchAdvantage >= 0) "+${r.holdoutTotalMatchAdvantage}" else "${r.holdoutTotalMatchAdvantage}"
+                                val evidenceText = if (r.strongEvidencePassed) {
+                                    "홀드아웃 누적 우위 $advSigned · 강한 근거 충족"
+                                } else {
+                                    "홀드아웃 누적 우위 $advSigned · 적용 기준 +${r.strongEvidenceThreshold}"
+                                }
+                                Text(
+                                    evidenceText,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
                             Text(
                                 "전체 검증 ${r.testedDraws}회 · 기본 ${r.fullEqual} / 후보 ${r.fullCandidate}",
                                 style = MaterialTheme.typography.bodySmall,

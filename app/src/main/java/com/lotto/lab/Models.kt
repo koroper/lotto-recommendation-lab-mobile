@@ -49,7 +49,7 @@ data class ResearchResult(
     val fullCandidate: Double,
     val holdoutEqual: Double,
     val holdoutCandidate: Double,
-    val foldCount: Int = 3,
+    val foldCount: Int = 0,
     val foldWins: Int = 0,
     val foldTies: Int = 0,
     val foldLosses: Int = 0,
@@ -60,7 +60,14 @@ data class ResearchResult(
     val folds: List<ValidationFold> = emptyList(),
     val searchCandidateCount: Int = 0,
     val selectedCandidateWeightsJson: String? = null,
-    val searchMethod: String? = null
+    val searchMethod: String? = null,
+    val basePromotionPassed: Boolean = false,
+    val candidateHoldoutTotalMatches: Int = 0,
+    val equalHoldoutTotalMatches: Int = 0,
+    val holdoutTotalMatchAdvantage: Int = 0,
+    val strongEvidenceThreshold: Int = 2,
+    val strongEvidencePassed: Boolean = false,
+    val isLegacyRecord: Boolean = false
 )
 
 data class ConfirmedRecord(

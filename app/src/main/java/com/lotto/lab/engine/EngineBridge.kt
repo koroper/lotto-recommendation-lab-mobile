@@ -102,7 +102,13 @@ object EngineBridge {
             folds = foldsList,
             searchCandidateCount = o.optInt("searchCandidateCount", 0),
             selectedCandidateWeightsJson = if (o.has("selectedCandidateWeights") && !o.isNull("selectedCandidateWeights")) o.getJSONObject("selectedCandidateWeights").toString() else null,
-            searchMethod = if (o.has("searchMethod") && !o.isNull("searchMethod")) o.getString("searchMethod") else null
+            searchMethod = if (o.has("searchMethod") && !o.isNull("searchMethod")) o.getString("searchMethod") else null,
+            basePromotionPassed = o.optBoolean("basePromotionPassed", o.optBoolean("promoted", false)),
+            candidateHoldoutTotalMatches = o.optInt("candidateHoldoutTotalMatches", 0),
+            equalHoldoutTotalMatches = o.optInt("equalHoldoutTotalMatches", 0),
+            holdoutTotalMatchAdvantage = o.optInt("holdoutTotalMatchAdvantage", 0),
+            strongEvidenceThreshold = o.optInt("strongEvidenceThreshold", 2),
+            strongEvidencePassed = o.optBoolean("strongEvidencePassed", false)
         )
     }
 }

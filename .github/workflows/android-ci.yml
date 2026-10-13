@@ -45,7 +45,10 @@ jobs:
       - name: Mobile engine + frozen desktop parity validation
         env:
           PYTHONPATH: app/src/main/python
-        run: python validate_mobile_v1_1.py
+        run: |
+          python validate_mobile_v1_1.py
+          python test_step3g_regression.py
+          python test_legacy_compatibility.py
 
       - name: Confirmed-ticket evaluation tests
         run: |

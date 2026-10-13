@@ -68,11 +68,41 @@ class LottoRepository(context: Context) {
         }
     }
 
+    companion object {
+        const val KEY_RESEARCH_RESULT = ResearchStateReconciler.KEY_RESEARCH_RESULT
+        const val KEY_RESEARCH_WEIGHTS = ResearchStateReconciler.KEY_RESEARCH_WEIGHTS
+        const val KEY_LEGACY_BACKUP = ResearchStateReconciler.KEY_LEGACY_BACKUP
+        const val MSG_LEGACY_NOTICE = ResearchStateReconciler.MSG_LEGACY_NOTICE
+    }
+
+    init {
+        reconcileLegacyResearchState()
+    }
+
+    fun reconcileLegacyResearchState() {
+        val rawResearch = db.loadState(KEY_RESEARCH_RESULT)
+        val rawWeights = db.loadState(KEY_RESEARCH_WEIGHTS)
+        val existingBackup = db.loadState(KEY_LEGACY_BACKUP)
+
+        val result = ResearchStateReconciler.reconcile(rawResearch, rawWeights, existingBackup)
+
+        if (result.backupToSave != null) {
+            db.saveState(KEY_LEGACY_BACKUP, result.backupToSave)
+        }
+        if (result.updatedResearchWeights != (rawWeights ?: "")) {
+            db.saveState(KEY_RESEARCH_WEIGHTS, result.updatedResearchWeights)
+        }
+        if (result.updatedResearchResult != null && result.updatedResearchResult != rawResearch) {
+            db.saveState(KEY_RESEARCH_RESULT, result.updatedResearchResult)
+        }
+    }
+
     suspend fun recommend(games: Int, style: String): RecommendationResult =
         withContext(Dispatchers.Default) {
+            reconcileLegacyResearchState()
             EngineBridge.recommend(
                 db.historyJson(),
-                db.loadState("research_weights"),
+                db.loadState(KEY_RESEARCH_WEIGHTS),
                 games,
                 style
             )
@@ -80,7 +110,7 @@ class LottoRepository(context: Context) {
 
     suspend fun runResearch(): ResearchResult = withContext(Dispatchers.Default) {
         val result = EngineBridge.quickResearch(db.historyJson(), 40)
-        db.saveState("research_result", JSONObject().apply {
+        db.saveState(KEY_RESEARCH_RESULT, JSONObject().apply {
             put("promoted", result.promoted)
             put("message", result.message)
             put("weights", JSONObject(result.weightsJson))
@@ -89,24 +119,68 @@ class LottoRepository(context: Context) {
             put("fullCandidate", result.fullCandidate)
             put("holdoutEqual", result.holdoutEqual)
             put("holdoutCandidate", result.holdoutCandidate)
+            put("primaryReason", result.primaryReason)
+            put("basePromotionPassed", result.basePromotionPassed)
+            put("candidateHoldoutTotalMatches", result.candidateHoldoutTotalMatches)
+            put("equalHoldoutTotalMatches", result.equalHoldoutTotalMatches)
+            put("holdoutTotalMatchAdvantage", result.holdoutTotalMatchAdvantage)
+            put("strongEvidenceThreshold", result.strongEvidenceThreshold)
+            put("strongEvidencePassed", result.strongEvidencePassed)
+            put("foldCount", result.foldCount)
+            put("foldWins", result.foldWins)
+            put("foldTies", result.foldTies)
+            put("foldLosses", result.foldLosses)
+            put("meanFoldGain", result.meanFoldGain)
+            put("worstFoldGain", result.worstFoldGain)
+            put("finalHoldoutGain", result.finalHoldoutGain)
+            put("searchCandidateCount", result.searchCandidateCount)
+            if (result.selectedCandidateWeightsJson != null) {
+                put("selectedCandidateWeights", JSONObject(result.selectedCandidateWeightsJson))
+            }
+            if (result.searchMethod != null) {
+                put("searchMethod", result.searchMethod)
+            }
+            put("isLegacyRecord", false)
         }.toString())
-        if (result.promoted) db.saveState("research_weights", result.weightsJson)
-        else db.saveState("research_weights", "")
+        if (result.promoted) db.saveState(KEY_RESEARCH_WEIGHTS, result.weightsJson)
+        else db.saveState(KEY_RESEARCH_WEIGHTS, "")
         result
     }
 
     fun savedResearch(): ResearchResult? {
-        val raw = db.loadState("research_result") ?: return null
+        reconcileLegacyResearchState()
+        val raw = db.loadState(KEY_RESEARCH_RESULT) ?: return null
+        if (raw.isBlank()) return null
         val o = JSONObject(raw)
+        val isLegacy = o.optBoolean("isLegacyRecord", false)
+        val promoted = if (isLegacy) false else o.getBoolean("promoted")
         return ResearchResult(
-            promoted = o.getBoolean("promoted"),
+            promoted = promoted,
             message = o.getString("message"),
             weightsJson = o.getJSONObject("weights").toString(),
             testedDraws = o.getInt("testedDraws"),
             fullEqual = o.getDouble("fullEqual"),
             fullCandidate = o.getDouble("fullCandidate"),
             holdoutEqual = o.getDouble("holdoutEqual"),
-            holdoutCandidate = o.getDouble("holdoutCandidate")
+            holdoutCandidate = o.getDouble("holdoutCandidate"),
+            primaryReason = if (o.has("primaryReason") && !o.isNull("primaryReason")) o.getString("primaryReason") else null,
+            basePromotionPassed = o.optBoolean("basePromotionPassed", o.optBoolean("promoted", false)),
+            candidateHoldoutTotalMatches = o.optInt("candidateHoldoutTotalMatches", 0),
+            equalHoldoutTotalMatches = o.optInt("equalHoldoutTotalMatches", 0),
+            holdoutTotalMatchAdvantage = o.optInt("holdoutTotalMatchAdvantage", 0),
+            strongEvidenceThreshold = o.optInt("strongEvidenceThreshold", 2),
+            strongEvidencePassed = o.optBoolean("strongEvidencePassed", false),
+            isLegacyRecord = isLegacy,
+            foldCount = o.optInt("foldCount", 0),
+            foldWins = o.optInt("foldWins", 0),
+            foldTies = o.optInt("foldTies", 0),
+            foldLosses = o.optInt("foldLosses", 0),
+            meanFoldGain = o.optDouble("meanFoldGain", 0.0),
+            worstFoldGain = o.optDouble("worstFoldGain", 0.0),
+            finalHoldoutGain = o.optDouble("finalHoldoutGain", 0.0),
+            searchCandidateCount = o.optInt("searchCandidateCount", 0),
+            selectedCandidateWeightsJson = if (o.has("selectedCandidateWeights") && !o.isNull("selectedCandidateWeights")) o.getJSONObject("selectedCandidateWeights").toString() else null,
+            searchMethod = if (o.has("searchMethod") && !o.isNull("searchMethod")) o.getString("searchMethod") else null
         )
     }
 

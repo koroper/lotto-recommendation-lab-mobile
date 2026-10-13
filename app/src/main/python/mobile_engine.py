@@ -490,6 +490,7 @@ def recommend(history_json, weights_json="", config_json=""):
 
 
 WORST_FOLD_GAIN_THRESHOLD = -0.05
+STRONG_EVIDENCE_MIN_ADVANTAGE = 2
 EPSILON = 1e-9
 
 
@@ -646,6 +647,17 @@ def _eval_promotion_gate(
     return bool(holdout_better and full_non_degraded and fold_wins_ok and mean_gain_ok and worst_fold_ok)
 
 
+def _eval_strong_evidence_action_gate(
+    base_promoted,
+    holdout_total_match_advantage,
+    min_advantage=STRONG_EVIDENCE_MIN_ADVANTAGE
+):
+    strong_evidence_passed = (
+        holdout_total_match_advantage is not None and holdout_total_match_advantage >= min_advantage
+    )
+    return bool(base_promoted and strong_evidence_passed)
+
+
 def _determine_primary_reason(
     has_sufficient_history,
     hold_equal,
@@ -681,6 +693,12 @@ def quick_research(history_json, test_draws=40):
     if available < 20 or len(history) < 100:
         return json.dumps({
             "promoted": False,
+            "basePromotionPassed": False,
+            "candidateHoldoutTotalMatches": 0,
+            "equalHoldoutTotalMatches": 0,
+            "holdoutTotalMatchAdvantage": 0,
+            "strongEvidenceThreshold": STRONG_EVIDENCE_MIN_ADVANTAGE,
+            "strongEvidencePassed": False,
             "primaryReason": "검증 이력 부족",
             "message": "검증 이력 부족으로 기본 가중치를 유지합니다. (최소 100회 이상 필요)",
             "weights": equal,
@@ -826,7 +844,27 @@ def quick_research(history_json, test_draws=40):
     full_gain = full_candidate - full_equal
     holdout_gain = hold_candidate - hold_equal
 
-    promoted = _eval_promotion_gate(
+    # Calculate exact integer matches on final holdout
+    candidate_holdout_total_matches = 0
+    equal_holdout_total_matches = 0
+    for f in holdout:
+        cand_comb = {
+            n: sum(f["scores"][m][n] * selected_candidate_weights[m] for m in mids)
+            for n in range(1, 46)
+        }
+        cand_top = sorted(cand_comb, key=lambda n: (-cand_comb[n], n))[:6]
+        candidate_holdout_total_matches += len(f["actual"] & set(cand_top))
+
+        eq_comb = {
+            n: sum(f["scores"][m][n] * equal[m] for m in mids)
+            for n in range(1, 46)
+        }
+        eq_top = sorted(eq_comb, key=lambda n: (-eq_comb[n], n))[:6]
+        equal_holdout_total_matches += len(f["actual"] & set(eq_top))
+
+    holdout_total_match_advantage = candidate_holdout_total_matches - equal_holdout_total_matches
+
+    base_promotion_passed = _eval_promotion_gate(
         hold_equal=hold_equal,
         hold_candidate=hold_candidate,
         full_equal=full_equal,
@@ -836,39 +874,55 @@ def quick_research(history_json, test_draws=40):
         worst_fold_gain=worst_fold_gain,
         eps=eps
     )
+    strong_evidence_passed = (holdout_total_match_advantage >= STRONG_EVIDENCE_MIN_ADVANTAGE)
+    promoted = _eval_strong_evidence_action_gate(
+        base_promoted=base_promotion_passed,
+        holdout_total_match_advantage=holdout_total_match_advantage,
+        min_advantage=STRONG_EVIDENCE_MIN_ADVANTAGE
+    )
     final_weights = selected_candidate_weights if promoted else equal
 
     primary_reason = None
     if promoted:
         message = "빠른 연구 보정 가중치를 적용합니다."
     else:
-        primary_reason = _determine_primary_reason(
-            has_sufficient_history=True,
-            hold_equal=hold_equal,
-            hold_candidate=hold_candidate,
-            full_equal=full_equal,
-            full_candidate=full_candidate,
-            fold_wins=fold_wins,
-            mean_fold_gain=mean_fold_gain,
-            worst_fold_gain=worst_fold_gain,
-            eps=eps
-        )
-        if primary_reason == "최종 홀드아웃 미개선":
-            if abs(hold_candidate - hold_equal) <= eps:
-                message = "독립 홀드아웃 검증에서 동점으로 개선이 없어 기본 가중치를 유지합니다."
+        if not base_promotion_passed:
+            primary_reason = _determine_primary_reason(
+                has_sufficient_history=True,
+                hold_equal=hold_equal,
+                hold_candidate=hold_candidate,
+                full_equal=full_equal,
+                full_candidate=full_candidate,
+                fold_wins=fold_wins,
+                mean_fold_gain=mean_fold_gain,
+                worst_fold_gain=worst_fold_gain,
+                eps=eps
+            )
+            if primary_reason == "최종 홀드아웃 미개선":
+                if abs(hold_candidate - hold_equal) <= eps:
+                    message = "독립 홀드아웃 검증에서 동점으로 개선이 없어 기본 가중치를 유지합니다."
+                else:
+                    message = "독립 홀드아웃 검증에서 개선이 없어 기본 가중치를 유지합니다."
+            elif primary_reason == "반복 검증 불안정":
+                message = "반복 검증에서 안정적인 우세를 확보하지 못해 기본 가중치를 유지합니다."
+            elif primary_reason == "일부 구간 성능 저하 과다":
+                message = "일부 검증 구간에서 과도한 성능 저하가 발생하여 기본 가중치를 유지합니다."
+            elif primary_reason == "전체 성능 저하":
+                message = "전체 기간 검증에서 성능이 저하되어 기본 가중치를 유지합니다."
             else:
-                message = "독립 홀드아웃 검증에서 개선이 없어 기본 가중치를 유지합니다."
-        elif primary_reason == "반복 검증 불안정":
-            message = "반복 검증에서 안정적인 우세를 확보하지 못해 기본 가중치를 유지합니다."
-        elif primary_reason == "일부 구간 성능 저하 과다":
-            message = "일부 검증 구간에서 과도한 성능 저하가 발생하여 기본 가중치를 유지합니다."
-        elif primary_reason == "전체 성능 저하":
-            message = "전체 기간 검증에서 성능이 저하되어 기본 가중치를 유지합니다."
+                message = "검증 기준을 충족하지 못해 기본 가중치를 유지합니다."
         else:
-            message = "검증 기준을 충족하지 못해 기본 가중치를 유지합니다."
+            primary_reason = "홀드아웃 근거 부족"
+            message = "검증 기준은 통과했지만 홀드아웃 누적 우위가 적용 기준(+2)에 미달하여 기본 가중치를 유지합니다."
 
     return json.dumps({
         "promoted": promoted,
+        "basePromotionPassed": base_promotion_passed,
+        "candidateHoldoutTotalMatches": candidate_holdout_total_matches,
+        "equalHoldoutTotalMatches": equal_holdout_total_matches,
+        "holdoutTotalMatchAdvantage": holdout_total_match_advantage,
+        "strongEvidenceThreshold": STRONG_EVIDENCE_MIN_ADVANTAGE,
+        "strongEvidencePassed": strong_evidence_passed,
         "message": message,
         "primaryReason": primary_reason,
         "weights": final_weights,
