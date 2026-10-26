@@ -4,8 +4,8 @@
 - 데이터: 실제 로또 1~1247회 이력, 공개 출처 두 곳에서 최근 20회차 일치 확인
 - 평가 범위: 1224~1247회, 총 24회차
 - GitHub Actions 실행 로그: https://github.com/koroper/lotto-recommendation-lab-mobile/actions/runs/40284341072
-- 코드: \`quality/portfolio_backtest.py\` (GitHub \`main\`)
-- 비교: 5게임/회, 6모델 동일가중치로 생성한 \`표준\`, \`분산\`, 5게임 무작위 포트폴리오 100회 반복(seed 2045)
+- 코드: `quality/portfolio_backtest.py` (GitHub `main`)
+- 비교: 5게임/회, 6모델 동일가중치로 생성한 `표준`, `분산`, 5게임 무작위 포트폴리오 100회 반복(seed 2045)
 - 각 평가 회차에서 **그 회차 이전의 기록만** 추천 엔진의 입력으로 제공함
 - 실제 사용자 확정 기록과 별개인 **가상의 과거 시뮬레이션 결과**임
 
