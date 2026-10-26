@@ -55,6 +55,9 @@ jobs:
           python test_confirmed_evaluation.py
           gradle --no-daemon :app:testDebugUnitTest
 
+      - name: Safe device APK preflight unit tests
+        run: python -m unittest discover -s tests -p 'test_verify_installable_apk.py'
+
       - name: Android static audit
         run: python audit_android_project.py
 

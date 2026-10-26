@@ -4,6 +4,13 @@ plugins {
     id("com.chaquo.python")
 }
 
+// Explicit opt-in for a device-update APK. Ordinary CI debug builds never require secrets.
+val lottoDeviceUpdate = providers.gradleProperty("lottoDeviceUpdate").orNull == "true"
+val lottoPreview = providers.gradleProperty("lottoPreview").orNull == "true"
+require(!(lottoDeviceUpdate && lottoPreview)) {
+    "lottoDeviceUpdate and lottoPreview are mutually exclusive."
+}
+
 android {
     namespace = "com.lotto.lab"
     compileSdk = 36
@@ -17,6 +24,31 @@ android {
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            if (lottoDeviceUpdate) {
+                // Private key is deliberately NOT in Git. Never generate a replacement
+                // signing key when preparing an update for an installed phone.
+                val projectKeystore = rootProject.file("debug.keystore")
+                require(projectKeystore.isFile) {
+                    "Cannot build device-update APK: private debug.keystore is missing from the project root."
+                }
+                storeFile = projectKeystore
+                storePassword = providers.environmentVariable("LOTTO_KEYSTORE_PASSWORD").orNull ?: "android"
+                keyAlias = providers.environmentVariable("LOTTO_KEY_ALIAS").orNull ?: "androiddebugkey"
+                keyPassword = providers.environmentVariable("LOTTO_KEY_PASSWORD").orNull ?: "android"
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            // AI Studio streaming emulator runs a standalone test app.
+            // Never ship this variant as an update to com.lotto.lab.
+            if (lottoPreview) applicationIdSuffix = ".preview"
         }
     }
 
