@@ -299,7 +299,7 @@ def _combination_scores(history, pool, final_scores, pair_counts, single_counts)
     return rows
 
 
-def _portfolio_objective(rows, style="표준", core_numbers=None):
+def _portfolio_objective(rows, style="표준", core_numbers=None, pair_penalty_override=None):
     if not rows: return -1e18
     combos=[tuple(map(int,r["numbers"])) for r in rows]
     scores=[float(r["score"]) for r in rows]
@@ -318,10 +318,18 @@ def _portfolio_objective(rows, style="표준", core_numbers=None):
     if style=="집중": w=dict(score=1.15,unique=.45,pair=.28,triple=.70,concentration=.15,core=1.10)
     elif style=="분산": w=dict(score=.92,unique=1.65,pair=1.30,triple=2.80,concentration=1.30,core=.30)
     else: w=dict(score=1.00,unique=1.00,pair=.75,triple=1.60,concentration=.70,core=.65)
+    if pair_penalty_override is not None:
+        # Research-only knob: exactly ONE standard-style portfolio term changes.
+        # Never affects live recommendations unless explicitly supplied.
+        if style != "표준" or not math.isfinite(float(pair_penalty_override)):
+            raise ValueError("Experiment requires finite standard-style pair penalty")
+        if not 0.0 <= float(pair_penalty_override) <= 3.0:
+            raise ValueError("Pair penalty experiment must be within [0, 3]")
+        w["pair"] = float(pair_penalty_override)
     return avg_score*w["score"]+unique_numbers*w["unique"]-repeated_pairs*w["pair"]-repeated_triples*w["triple"]-concentration*w["concentration"]+core_repeat*w["core"]
 
 
-def _portfolio(combos, games, style, core_numbers=None, candidate_limit=None, beam_width=None):
+def _portfolio(combos, games, style, core_numbers=None, candidate_limit=None, beam_width=None, pair_penalty_override=None):
     if not combos: return []
     games=max(1,min(int(games),10)); total=len(combos)
     if candidate_limit is None: candidate_limit=180 if style=="분산" else 150
@@ -335,7 +343,7 @@ def _portfolio(combos, games, style, core_numbers=None, candidate_limit=None, be
     if len(filtered)>=games: cand=filtered
     n=len(cand); games=min(games,n)
     beam=[]; max_first=max(1,n-games+1)
-    for i in range(max_first): beam.append((_portfolio_objective([cand[i]],style,core_numbers),(i,)))
+    for i in range(max_first): beam.append((_portfolio_objective([cand[i]],style,core_numbers,pair_penalty_override),(i,)))
     beam=sorted(beam,key=lambda x:x[0],reverse=True)[:beam_width]
     for depth in range(1,games):
         expanded=[]; need_after=games-(depth+1); seen=set()
@@ -344,7 +352,7 @@ def _portfolio(combos, games, style, core_numbers=None, candidate_limit=None, be
                 new_inds=inds+(j,)
                 if new_inds in seen: continue
                 seen.add(new_inds); rows=[cand[k] for k in new_inds]
-                expanded.append((_portfolio_objective(rows,style,core_numbers),new_inds))
+                expanded.append((_portfolio_objective(rows,style,core_numbers,pair_penalty_override),new_inds))
         if not expanded: break
         beam=sorted(expanded,key=lambda x:x[0],reverse=True)[:beam_width]
     if not beam: return []
@@ -441,7 +449,17 @@ def recommend(history_json, weights_json="", config_json=""):
         fset = set(fixed)
         combos = [c for c in combos if fset.issubset(set(c["numbers"]))]
     core_numbers = ordered_all[:2]
-    selected = _portfolio(combos, games, style, core_numbers=core_numbers)
+    # The Android UI never sends this research-only option. In its absence the
+    # production selection is bit-for-bit identical to the proven baseline.
+    experiment_pair_penalty = config.get("experimentPairPenalty")
+    if experiment_pair_penalty is not None:
+        if style != "표준":
+            raise ValueError("Pair-penalty experiment supports 표준 only")
+        experiment_pair_penalty = float(experiment_pair_penalty)
+        if not math.isfinite(experiment_pair_penalty) or not 0.0 <= experiment_pair_penalty <= 3.0:
+            raise ValueError("Experimental pair penalty must be finite in [0, 3]")
+    selected = _portfolio(combos, games, style, core_numbers=core_numbers,
+                          pair_penalty_override=experiment_pair_penalty)
 
     top6 = ordered_all[:6]
     counts = {}

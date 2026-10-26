@@ -61,6 +61,9 @@ jobs:
       - name: Historical portfolio benchmark regression tests
         run: python -m unittest discover -s tests -p 'test_portfolio_backtest.py'
 
+      - name: One-variable portfolio research regression
+        run: python -m unittest discover -s tests -p 'test_pair_penalty_experiment.py'
+
       - name: Android static audit
         run: python audit_android_project.py
 
