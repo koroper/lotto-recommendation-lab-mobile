@@ -11,58 +11,80 @@ import java.net.URL
 
 class LottoRepository(context: Context) {
     private val db = LottoDb(context.applicationContext)
-    private val dataUrl =
-        "https://raw.githubusercontent.com/JunKwon91/lotto-data/main/data/lotto-history.json"
+    // No account, backend or paid API is required. Each source contains a complete history.
+    private val historySources = listOf(
+        "기존 원본" to "https://raw.githubusercontent.com/JunKwon91/lotto-data/main/data/lotto-history.json",
+        "공개 미러 A" to "https://smok95.github.io/lotto/results/all.json",
+        "공개 미러 B" to "https://papaya5rhw1984.github.io/lotto-data/all.json"
+    )
 
     suspend fun ensureData(): String = withContext(Dispatchers.IO) {
         val before = db.latestDraw()
-        try {
-            val payload = fetchPayload()
-            validatePayload(payload)
-            val data = payload.getJSONArray("data")
-            var onlineLatest = 0
-            for (i in 0 until data.length()) {
-                onlineLatest = maxOf(onlineLatest, data.getJSONObject(i).getInt("drawNo"))
+        val expected = DrawHistoryPolicy.expectedCompletedDraw()
+        val savedHistory = if (before > 0) db.historyJson() else null
+        var best: DrawHistorySnapshot? = null
+        var sourceUsed = ""
+        val failures = mutableListOf<String>()
+
+        for ((name, url) in historySources) {
+            try {
+                val incoming = DrawHistoryPolicy.parse(fetchText(url))
+                if (incoming.latestDraw < before) {
+                    failures.add(name + ": 저장 데이터보다 오래됨 (" + incoming.latestDraw + "회)")
+                    continue
+                }
+                if (savedHistory != null &&
+                    !DrawHistoryPolicy.matchingOverlap(savedHistory, incoming)) {
+                    failures.add(name + ": 기존 당첨 결과와 불일치")
+                    continue
+                }
+                if (best == null || incoming.latestDraw > best.latestDraw) {
+                    best = incoming
+                    sourceUsed = name
+                }
+                if (incoming.latestDraw >= expected) break
+            } catch (e: Exception) {
+                failures.add(name + ": " + (e.message ?: "조회 실패").take(100))
             }
-            if (db.drawCount() == 0 || onlineLatest > before) {
-                db.replaceHistory(payload)
-                "최신 ${db.latestDraw()}회까지 업데이트 완료"
-            } else {
-                "최신 ${before}회 데이터 사용"
-            }
-        } catch (e: Exception) {
-            if (db.drawCount() == 0) throw e
-            "네트워크 업데이트 실패 · 저장된 ${before}회 데이터 사용"
+        }
+
+        val chosen = best
+        if (chosen != null && chosen.latestDraw > before) {
+            // replaceHistory changes only the draws table, inside one SQL transaction.
+            // Confirmed tickets and research state stay untouched.
+            db.replaceHistory(chosen.payload)
+        }
+        val latest = db.latestDraw()
+        if (latest == 0) {
+            throw IllegalStateException("당첨 데이터를 가져올 수 없습니다. " + failures.joinToString("; "))
+        }
+        when {
+            latest < expected ->
+                "⚠️ 데이터 지연: " + latest + "회까지 저장됨 · 현재 " + expected +
+                    "회 결과 필요. 구매 전 갱신을 확인하세요. " +
+                    failures.take(2).joinToString("; ")
+            chosen != null && chosen.latestDraw > before ->
+                "최신 " + latest + "회 업데이트 완료 · " + sourceUsed
+            chosen != null ->
+                "최신 " + latest + "회 확인 완료 · " + sourceUsed
+            else ->
+                "저장된 " + latest + "회 데이터 사용 · 온라인 확인 실패 (" +
+                    failures.take(2).joinToString("; ") + ")"
         }
     }
 
-    private fun validatePayload(payload: JSONObject) {
-        val data = payload.optJSONArray("data") ?: throw IllegalStateException("당첨 데이터의 data 배열이 없습니다.")
-        if (data.length() < 60) throw IllegalStateException("당첨 데이터가 너무 적습니다: ${data.length()}회")
-        val seen = mutableSetOf<Int>()
-        for (i in 0 until data.length()) {
-            val item = data.getJSONObject(i); val draw = item.getInt("drawNo")
-            if (!seen.add(draw)) throw IllegalStateException("중복 회차: ${draw}회")
-            val nums = item.getJSONArray("numbers")
-            if (nums.length()!=6) throw IllegalStateException("${draw}회 번호 개수가 6개가 아닙니다.")
-            val set=mutableSetOf<Int>()
-            for (j in 0 until 6) { val n=nums.getInt(j); if (n !in 1..45 || !set.add(n)) throw IllegalStateException("${draw}회 번호 데이터가 올바르지 않습니다.") }
-            val bonus=item.getInt("bonusNo"); if (bonus !in 1..45 || bonus in set) throw IllegalStateException("${draw}회 보너스 번호가 올바르지 않습니다.")
-        }
-    }
-
-    private fun fetchPayload(): JSONObject {
-        val conn = URL(dataUrl).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15000
-        conn.readTimeout = 25000
+    private fun fetchText(url: String): String {
+        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 20000
         conn.requestMethod = "GET"
-        conn.setRequestProperty("User-Agent", "LottoLabMobile/1.0")
+        conn.setRequestProperty("User-Agent", "LottoLabMobile/1.2")
+        conn.setRequestProperty("Cache-Control", "no-cache")
         return try {
             if (conn.responseCode !in 200..299) {
-                throw IllegalStateException("데이터 서버 응답 ${conn.responseCode}")
+                throw IllegalStateException("HTTP " + conn.responseCode)
             }
-            val text = conn.inputStream.bufferedReader().use { it.readText() }
-            JSONObject(text)
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
             conn.disconnect()
         }
