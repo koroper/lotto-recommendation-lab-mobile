@@ -58,6 +58,9 @@ jobs:
       - name: Safe device APK preflight unit tests
         run: python -m unittest discover -s tests -p 'test_verify_installable_apk.py'
 
+      - name: Historical portfolio benchmark regression tests
+        run: python -m unittest discover -s tests -p 'test_portfolio_backtest.py'
+
       - name: Android static audit
         run: python audit_android_project.py
 
