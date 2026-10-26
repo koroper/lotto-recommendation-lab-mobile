@@ -1,0 +1,72 @@
+name: One-time pair-penalty historical A-B replay
+
+on:
+  push:
+    branches: [ research/run-pair-penalty-1247-once ]
+
+permissions:
+  contents: read
+
+jobs:
+  paired-historical-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Verify two independent public historical files
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+          from quality.portfolio_backtest import normalize_history
+          urls = [
+              "https://raw.githubusercontent.com/JunKwon91/lotto-data/main/data/lotto-history.json",
+              "https://papaya5rhw1984.github.io/lotto-data/all.json",
+          ]
+          histories = []
+          for url in urls:
+              request = urllib.request.Request(url, headers={"User-Agent": "LottoLabPairPenaltyResearch/1.0"})
+              with urllib.request.urlopen(request, timeout=25) as response:
+                  history = normalize_history(json.load(response))
+              print("SOURCE_CHECK", url, len(history), history[-1]["draw"])
+              histories.append(history)
+          a, b = histories
+          assert len(a) >= 1247 and len(b) >= 1247, "Real history too short"
+          assert a[:1247] == b[:1247], "Public source divergence, abort research"
+          # Pre-registered 1247 cutoff: later draws, even if released, may not influence this study.
+          Path("verified-history.json").write_text(
+              json.dumps(a[:1247], ensure_ascii=False), encoding="utf-8"
+          )
+          print("SOURCE_PARITY_PASS through draw 1247")
+          PY
+
+      - name: Execute fixed historic pair penalty A/B 48 draw replay
+        run: |
+          python quality/pair_penalty_experiment.py             --history verified-history.json             --json-output pair-experiment-1247.json
+
+      - name: Verify no promotion and report full paired metrics
+        run: |
+          python - <<'PY'
+          import json
+          r = json.load(open("pair-experiment-1247.json", encoding="utf-8"))
+          assert r["status"] == "HOLD_PROSPECTIVE_UNTESTED"
+          assert r["engineChangedForApp"] is False
+          assert [w["firstDraw"] for w in r["windows"]] == [1152, 1200]
+          print("PAIR_STUDY_SUMMARY=" + json.dumps({
+              "status": r["status"],
+              "baselinePenalty": r["baselinePenalty"],
+              "candidatePenalty": r["candidatePenalty"],
+              "repeatedPairReductionPercent": r["repeatedPairReductionPercent"],
+              "windows": [
+                  {k: v for k, v in w.items() if k != "drawDetails"}
+                  for w in r["windows"]
+              ]
+          }, ensure_ascii=False))
+          PY
+
+      # No artifacts: results are visible in free Actions logs.
