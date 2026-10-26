@@ -34,7 +34,9 @@ ck('payload validation', 'DrawHistoryPolicy.parse(fetchText(url))' in repo)
 ck('latest from observed history', 'incoming.latestDraw' in repo and 'db.latestDraw()' in repo)
 ck('confirmed ID DB', 'confirmedRecommendationId' in db)
 ck('confirmed ID ViewModel', 'confirmedRecommendationId(rec.targetDraw) == rec.recommendationId' in vm)
-ck('versionCode increment', 'versionCode = 3' in app_gradle)\nck('multi-source fallback', 'smok95.github.io' in repo and 'papaya5rhw1984.github.io' in repo)\nck('stale result warning', 'DrawHistoryPolicy.expectedCompletedDraw()' in repo and '⚠️ 데이터 지연' in repo)
+ck('versionCode increment', 'versionCode = 3' in app_gradle)
+ck('multi-source fallback', 'smok95.github.io' in repo and 'papaya5rhw1984.github.io' in repo)
+ck('stale result warning', 'DrawHistoryPolicy.expectedCompletedDraw()' in repo and '⚠️ 데이터 지연' in repo)
 
 for name, passed in checks:
     print(('PASS' if passed else 'FAIL'), '-', name)
