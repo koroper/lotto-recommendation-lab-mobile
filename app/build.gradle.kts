@@ -12,8 +12,8 @@ android {
         applicationId = "com.lotto.lab"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1-audited"
+        versionCode = 3
+        versionName = "1.2-history-fix"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
