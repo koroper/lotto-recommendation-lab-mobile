@@ -93,7 +93,7 @@ fun RecommendationScreen(state: AppUiState, vm: MainViewModel) {
     ) {
         item {
             Header(
-                "🎯 ${rec.targetDraw}회 최종 추천",
+                if (state.dataMessage.startsWith("⚠️")) "⚠️ ${rec.targetDraw}회 참고용 · 최신 데이터 미확인" else "🎯 ${rec.targetDraw}회 최종 추천",
                 "최신 ${rec.latestDraw}회 · ${rec.latestDate} · ${state.dataMessage}"
             )
         }
@@ -182,9 +182,9 @@ fun RecommendationScreen(state: AppUiState, vm: MainViewModel) {
             Button(
                 onClick = vm::confirmCurrent,
                 modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
-                enabled = !state.loading
+                enabled = !state.loading && !state.dataMessage.startsWith("⚠️")
             ) {
-                Text(if (state.confirmedCurrent) "확정 구매안 업데이트" else "이번 주 구매안 확정")
+                Text(if (state.dataMessage.startsWith("⚠️")) "최신 데이터 확인 후 확정 가능" else if (state.confirmedCurrent) "확정 구매안 업데이트" else "이번 주 구매안 확정")
             }
         }
 
@@ -683,8 +683,18 @@ fun SettingsScreen(state: AppUiState, vm: MainViewModel) {
             Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { vm.setGames(state.games - 1) }, enabled = state.games > 1) { Text("−") }
                 OutlinedButton(onClick = { vm.setGames(state.games + 1) }, enabled = state.games < 10) { Text("+") }
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = vm::refreshAll) { Text("최신 데이터 확인") }
+            }
+            OutlinedButton(
+                onClick = vm::refreshAll,
+                modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+                enabled = !state.loading
+            ) { Text(if (state.loading) "데이터 확인 중..." else "최신 데이터 확인") }
+            if (state.dataMessage.isNotBlank()) {
+                Text(
+                    state.dataMessage,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
         item {
