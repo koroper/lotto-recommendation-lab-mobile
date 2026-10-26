@@ -1,0 +1,76 @@
+name: One-time real-history portfolio benchmark
+
+on:
+  push:
+    branches: [ research/portfolio-baseline-1247 ]
+
+permissions:
+  contents: read
+
+jobs:
+  real-history-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout research code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Independently verify real draw data
+        run: |
+          python - <<'PY'
+          import json
+          import urllib.request
+          from pathlib import Path
+          from quality.portfolio_backtest import normalize_history
+
+          sources = [
+              "https://raw.githubusercontent.com/JunKwon91/lotto-data/main/data/lotto-history.json",
+              "https://papaya5rhw1984.github.io/lotto-data/all.json",
+          ]
+          snapshots = []
+          for src in sources:
+              req = urllib.request.Request(src, headers={"User-Agent": "LottoLabResearch/1.0"})
+              with urllib.request.urlopen(req, timeout=25) as response:
+                  raw = json.loads(response.read().decode("utf-8"))
+              hist = normalize_history(raw)
+              print("SOURCE", src, "DRAW_COUNT", len(hist), "LATEST", hist[-1]["draw"])
+              snapshots.append(hist)
+
+          a, b = snapshots
+          if len(a) != 1247 or len(b) != 1247 or a[-20:] != b[-20:]:
+              raise RuntimeError("Hold: latest two public source histories disagree for real draw 1247")
+          Path("verified-history.json").write_text(
+              json.dumps(a, ensure_ascii=False), encoding="utf-8"
+          )
+          print("VERIFIED_SOURCES_PASS", len(a), "latest", a[-1]["date"])
+          PY
+
+      - name: Run 24-draw five-ticket model-vs-random benchmark
+        run: |
+          python quality/portfolio_backtest.py \
+            --history verified-history.json --window 24 \
+            --games 5 --repetitions 100 --seed 2045 \
+            --json-output portfolio-benchmark-1247.json
+
+      - name: Print compact evidence for independent review
+        run: |
+          python - <<'PY'
+          import json
+          r = json.load(open("portfolio-benchmark-1247.json", encoding="utf-8"))
+          report = {
+              "status": r["status"],
+              "drawRange": [r["evaluatedFirstDraw"], r["evaluatedLastDraw"]],
+              "games": r["games"],
+              "styles": r["styles"],
+              "randomBaseline": r["randomBaseline"],
+              "recommendationChanged": r["recommendationChanged"],
+          }
+          print("PORTFOLIO_AUDIT_RESULT=" + json.dumps(report, ensure_ascii=False))
+          PY
+
+      # One-time temporary research branch only. No build artifacts or key material.
